@@ -180,6 +180,43 @@ void Test_NormalizeLot_StepIntegerWhole()
 }
 
 //==================================================================
+// SLDistanceFloor (Path A — minimum allowed SL distance)
+//==================================================================
+void Test_SLFloor_AtrTermDominates()
+{
+   Print("[Test_SLFloor_AtrTermDominates]");
+   //  stops_level 10 pts × point 0.00001 = 0.00010; ATR 0.0050 × mult 1.0 = 0.0050.
+   //  Floor = max(0.00010, 0.00500) = 0.00500.
+   AssertEqDbl(CPositionManager::SLDistanceFloor(10, 0.00001, 0.0050, 1.0),
+               0.00500, 1e-9, "ATR term wins");
+}
+void Test_SLFloor_StopsLevelTermDominates()
+{
+   Print("[Test_SLFloor_StopsLevelTermDominates]");
+   //  stops_level 300 pts × point 0.00001 = 0.00300; ATR 0.0010 × mult 1.0 = 0.0010.
+   //  Floor = max(0.00300, 0.00100) = 0.00300.
+   AssertEqDbl(CPositionManager::SLDistanceFloor(300, 0.00001, 0.0010, 1.0),
+               0.00300, 1e-9, "stops-level term wins");
+}
+void Test_SLFloor_ZeroAtr_FallsBackToStopsLevel()
+{
+   Print("[Test_SLFloor_ZeroAtr_FallsBackToStopsLevel]");
+   //  ATR 0 → ATR term dropped; floor = stops_level term only.
+   AssertEqDbl(CPositionManager::SLDistanceFloor(50, 0.00001, 0.0, 1.0),
+               0.00050, 1e-9, "ATR=0 → stops-level only");
+   //  Both zero → floor 0.
+   AssertEqDbl(CPositionManager::SLDistanceFloor(0, 0.00001, 0.0, 1.0),
+               0.0, 1e-9, "both terms 0 → floor 0");
+}
+void Test_SLFloor_MultZeroDropsAtrTerm()
+{
+   Print("[Test_SLFloor_MultZeroDropsAtrTerm]");
+   //  mult 0 → ATR term dropped even with a real ATR; floor = stops_level term.
+   AssertEqDbl(CPositionManager::SLDistanceFloor(20, 0.00001, 0.0080, 0.0),
+               0.00020, 1e-9, "mult=0 → stops-level only");
+}
+
+//==================================================================
 // InitialTPPrice
 //==================================================================
 void Test_TP_BuyDefault2R_NoSR()
@@ -289,6 +326,10 @@ void OnStart()
    Test_NormalizeLot_ClampToMax();
    Test_NormalizeLot_StepPoint1();
    Test_NormalizeLot_StepIntegerWhole();
+   Test_SLFloor_AtrTermDominates();
+   Test_SLFloor_StopsLevelTermDominates();
+   Test_SLFloor_ZeroAtr_FallsBackToStopsLevel();
+   Test_SLFloor_MultZeroDropsAtrTerm();
    Test_TP_BuyDefault2R_NoSR();
    Test_TP_BuySRClosedThan2R();
    Test_TP_BuySRBeyond5R_Default2R();

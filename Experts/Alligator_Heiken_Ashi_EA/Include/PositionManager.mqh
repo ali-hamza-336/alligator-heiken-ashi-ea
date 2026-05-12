@@ -72,6 +72,8 @@ public:
    static double     NormalizeLot     (const double raw_lot,
                                        const double vol_min, const double vol_max,
                                        const double vol_step);
+   static double     SLDistanceFloor  (const long stops_level_pts, const double point,
+                                       const double atr, const double min_sl_atr_mult);
    static double     InitialTPPrice   (const bool is_buy,
                                        const double entry, const double sl,
                                        const double &sr_in_direction[]);
@@ -91,6 +93,7 @@ public:
                                const int slip_nas_points,
                                const int sr_lookback_h1, const int sr_lookback_h4,
                                const int sr_swing_each_side,
+                               const double min_sl_atr_mult, const double max_lot,
                                OrderPlan &out);
 
    //--- Live: send the order via CTrade. Bounded retries on transient retcodes.
@@ -156,6 +159,24 @@ double CPositionManager::NormalizeLot(const double raw_lot,
    if(stepped < vol_min) return 0.0;          // below broker min → caller skips
    if(stepped > vol_max) return vol_max;
    return NormalizeDouble(stepped, 8);
+  }
+
+//+------------------------------------------------------------------+
+//| Path A: minimum allowed SL distance for a new entry =            |
+//|   max(broker stops_level × point, min_sl_atr_mult × ATR).        |
+//| A tangled-Alligator (Type-B) entry can otherwise put the         |
+//| structural SL a fraction of a pip from entry — which the broker  |
+//| rejects (Invalid stops) and which blows up the risk-based lot.   |
+//| A non-positive ATR (or mult, or stops_level) just drops that     |
+//| term; if both terms are 0 the floor is 0 and the caller's other  |
+//| checks (sl_dist<=0, lot collapse) still apply.                   |
+//+------------------------------------------------------------------+
+double CPositionManager::SLDistanceFloor(const long stops_level_pts, const double point,
+                                         const double atr, const double min_sl_atr_mult)
+  {
+   const double a = (stops_level_pts > 0 && point > 0) ? (double)stops_level_pts * point : 0.0;
+   const double b = (atr > 0 && min_sl_atr_mult > 0)   ? min_sl_atr_mult * atr           : 0.0;
+   return MathMax(a, b);
   }
 
 //+------------------------------------------------------------------+
@@ -231,6 +252,7 @@ bool CPositionManager::BuildPlan(const string sym_broker, const string sym_canon
                                  const int slip_nas_points,
                                  const int sr_lookback_h1, const int sr_lookback_h4,
                                  const int sr_swing_each_side,
+                                 const double min_sl_atr_mult, const double max_lot,
                                  OrderPlan &out)
   {
    //--- Static fields
@@ -271,10 +293,21 @@ bool CPositionManager::BuildPlan(const string sym_broker, const string sym_canon
    if(sl_dist <= 0)
      { out.invalid_reason = "sl_distance==0"; return false; }
 
-   //--- Pip-value & lot
+   //--- Path A: reject if the structural SL is closer to entry than the floor
+   //--- (broker stops level OR min_sl_atr_mult×ATR) — see SLDistanceFloor.
+   {
+      const long   stops_level_pts = SymbolInfoInteger(sym_broker, SYMBOL_TRADE_STOPS_LEVEL);
+      const double sl_floor = SLDistanceFloor(stops_level_pts, point, atr, min_sl_atr_mult);
+      if(sl_dist < sl_floor)
+        { out.invalid_reason = StringFormat("SL too tight: dist=%.5f < floor=%.5f (stops_lvl=%dpts, %.2f*ATR=%.5f)",
+                                            sl_dist, sl_floor, (int)stops_level_pts, min_sl_atr_mult, min_sl_atr_mult*atr);
+          return false; }
+   }
+
+   //--- Pip-value & lot (lot hard-capped at max_lot — belt-and-braces vs blow-ups)
    const double pip_value = PipValuePerLot(tick_value, tick_size, pip);
    out.lot_raw = LotSizeFor(equity, out.risk_pct, sl_dist, pip_value, pip);
-   out.lots    = NormalizeLot(out.lot_raw, vol_min, vol_max, vol_step);
+   out.lots    = NormalizeLot(MathMin(out.lot_raw, max_lot), vol_min, vol_max, vol_step);
    if(out.lots <= 0)
      { out.invalid_reason = StringFormat("lot collapsed (raw=%.4f min=%.2f)", out.lot_raw, vol_min);
        return false; }

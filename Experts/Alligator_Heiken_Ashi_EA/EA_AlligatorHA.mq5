@@ -38,6 +38,7 @@ input double  Risk_Position3         = 0.70;      // % per third trade
 input double  Max_Daily_Loss         = 1.50;      // % — hard stop for the day
 input int     Max_Streak_Length      = 3;         // SLs before streak reset
 input double  Max_Total_DD_Buffer    = 7.00;      // % below initial — emergency block
+input double  Max_Lot                = 50.0;      // Path A: hard ceiling on any single lot (belt-and-braces vs sizing blow-ups)
 
 //--- SESSION TIMES (NY local)
 input int     NY_Start_Hour          = 8;
@@ -57,6 +58,7 @@ input int     Lips_Shift             = 3;
 input int     ATR_Period             = 14;
 input double  ATR_Mouth_Open_Mult    = 0.4;       // Lips-Jaw separation
 input double  ATR_SL_Buffer          = 0.2;       // beyond Jaw/swing
+input double  Min_SL_ATR_Mult        = 1.0;       // Path A: reject a signal whose structural SL is closer than this×ATR (or the broker stops level) to entry
 input double  ATR_Tangle_Tolerance   = 0.3;       // for "mouth closed" detection
 input double  Min_ATR_Ratio          = 0.5;       // dead market filter
 input double  Trail_ATR_Buffer       = 0.3;
@@ -88,8 +90,8 @@ input double  Spread_USDCHF          = 2.0;
 input double  Spread_AUDUSD          = 2.0;
 input double  Spread_USDCAD          = 2.0;
 input double  Spread_NZDUSD          = 2.0;
-input double  Spread_XAUUSD          = 30.0;      // 30 cents = 30 pips on gold
-input double  Spread_NAS100          = 2.0;       // points
+input double  Spread_XAUUSD          = 50.0;      // Path A: was 30 (too tight on IC Markets gold); per-broker tunable
+input double  Spread_NAS100          = 200.0;     // Path A: was 2 (USTEC quotes ~90 pts on IC Markets); per-broker tunable
 
 //--- SLIPPAGE
 input int     Slippage_FX_Pips       = 3;
@@ -102,8 +104,8 @@ input int     News_Block_Min_Before  = 15;
 input int     News_Block_Min_After   = 15;
 input string  News_Impact_Filter     = "High";    // High, Medium+, All
 
-//--- SYMBOLS (CSV list)
-input string  Trade_Symbols          = "EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,USDCAD,NZDUSD,XAUUSD,NAS100";
+//--- SYMBOLS (CSV list) — Path A Stage 1: dropped USDCAD & AUDUSD (consistent losers in the 12-mo backtest)
+input string  Trade_Symbols          = "EURUSD,GBPUSD,USDJPY,USDCHF,NZDUSD,XAUUSD,NAS100";
 
 //--- SYSTEM
 input long    Magic_Number           = 20260503;
@@ -412,6 +414,7 @@ void OnNewM15Bar(const string sym, const datetime bar_time)
                          Magic_Number,
                          Slippage_FX_Pips, Slippage_Gold_Cents, Slippage_NAS_Points,
                          SR_Lookback_Bars_1H, SR_Lookback_Bars_4H, SR_Swing_Bars_Each_Side,
+                         Min_SL_ATR_Mult, Max_Lot,
                          plan);
    if(!built)
      {
@@ -955,6 +958,8 @@ bool ValidateInputs()
    if(LipsBreak_ATR_Buffer < 0)                     { Log.Error("LipsBreak_ATR_Buffer must be >= 0"); return false; }
    if(LipsBreak_Confirm_Bars < 1 || LipsBreak_Confirm_Bars > 3) { Log.Error("LipsBreak_Confirm_Bars must be 1..3"); return false; }
    if(LipsBreak_Min_Hold_Bars < 0)                  { Log.Error("LipsBreak_Min_Hold_Bars must be >= 0"); return false; }
+   if(Min_SL_ATR_Mult < 0)                          { Log.Error("Min_SL_ATR_Mult must be >= 0");      return false; }
+   if(Max_Lot <= 0)                                 { Log.Error("Max_Lot must be > 0");               return false; }
    return true;
   }
 
