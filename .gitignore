@@ -1,0 +1,31 @@
+# This git repo is rooted at the MQL5/ folder but tracks ONLY the
+# "Alligator + Heiken Ashi EA" project, so the repo mirrors the live MT5
+# layout (Experts/Alligator_Heiken_Ashi_EA/ + Scripts/Alligator_Heiken_Ashi_EA_Tests/).
+# Everything else under MQL5/ (other EAs, indicators, the standard Include/,
+# Files/, Logs/, Profiles/, experts.dat, ...) is ignored.
+
+# 1) Ignore everything at the MQL5 root, then re-include just what we want.
+/*
+!/.gitignore
+!/Experts/
+!/Scripts/
+
+# 2) Inside Experts/ — only our project folder.
+/Experts/*
+!/Experts/Alligator_Heiken_Ashi_EA/
+
+# 3) Inside Scripts/ — only our tests folder.
+/Scripts/*
+!/Scripts/Alligator_Heiken_Ashi_EA_Tests/
+
+# 4) Within the tracked folders: ignore build artifacts, runtime state,
+#    and the large/transient Strategy-Tester dumps.
+*.ex5
+EA_State*.json
+*.tmp
+journel*.txt
+journal*.txt
+*ReportTester*.xlsx
+*ReportTester*.htm*
+*ReportOptimizer*.xml
+*ReportOptimizer*.htm*
