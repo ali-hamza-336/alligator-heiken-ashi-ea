@@ -217,6 +217,51 @@ void Test_SLFloor_MultZeroDropsAtrTerm()
 }
 
 //==================================================================
+// IsSLOnCorrectSide (Path A Stage 1.1 — wrong-side SL guard)
+//==================================================================
+void Test_SLSide_Buy_Ok()
+{
+   Print("[Test_SLSide_Buy_Ok]");
+   //  BUY: SL must be BELOW entry. 1.09800 < 1.10000 → OK.
+   Assert(CPositionManager::IsSLOnCorrectSide(true, 1.10000, 1.09800),
+          "BUY sl<entry → true");
+}
+void Test_SLSide_Buy_Equal()
+{
+   Print("[Test_SLSide_Buy_Equal]");
+   //  sl==entry leaves a zero-distance stop; treated as wrong-side (broker rejects).
+   Assert(!CPositionManager::IsSLOnCorrectSide(true, 1.10000, 1.10000),
+          "BUY sl==entry → false");
+}
+void Test_SLSide_Buy_Above()
+{
+   Print("[Test_SLSide_Buy_Above]");
+   //  The actual SignalEngine bug: A_BUY with sl ABOVE entry → must reject.
+   Assert(!CPositionManager::IsSLOnCorrectSide(true, 1.10000, 1.10200),
+          "BUY sl>entry → false");
+}
+void Test_SLSide_Sell_Ok()
+{
+   Print("[Test_SLSide_Sell_Ok]");
+   //  SELL: SL must be ABOVE entry. 1.10200 > 1.10000 → OK.
+   Assert(CPositionManager::IsSLOnCorrectSide(false, 1.10000, 1.10200),
+          "SELL sl>entry → true");
+}
+void Test_SLSide_Sell_Equal()
+{
+   Print("[Test_SLSide_Sell_Equal]");
+   Assert(!CPositionManager::IsSLOnCorrectSide(false, 1.10000, 1.10000),
+          "SELL sl==entry → false");
+}
+void Test_SLSide_Sell_Below()
+{
+   Print("[Test_SLSide_Sell_Below]");
+   //  The actual SignalEngine bug: A_SELL with sl BELOW entry → must reject.
+   Assert(!CPositionManager::IsSLOnCorrectSide(false, 1.10000, 1.09800),
+          "SELL sl<entry → false");
+}
+
+//==================================================================
 // InitialTPPrice
 //==================================================================
 void Test_TP_BuyDefault2R_NoSR()
@@ -330,6 +375,12 @@ void OnStart()
    Test_SLFloor_StopsLevelTermDominates();
    Test_SLFloor_ZeroAtr_FallsBackToStopsLevel();
    Test_SLFloor_MultZeroDropsAtrTerm();
+   Test_SLSide_Buy_Ok();
+   Test_SLSide_Buy_Equal();
+   Test_SLSide_Buy_Above();
+   Test_SLSide_Sell_Ok();
+   Test_SLSide_Sell_Equal();
+   Test_SLSide_Sell_Below();
    Test_TP_BuyDefault2R_NoSR();
    Test_TP_BuySRClosedThan2R();
    Test_TP_BuySRBeyond5R_Default2R();

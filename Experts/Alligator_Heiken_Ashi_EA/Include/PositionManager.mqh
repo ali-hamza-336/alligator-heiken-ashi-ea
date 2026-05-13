@@ -74,6 +74,7 @@ public:
                                        const double vol_step);
    static double     SLDistanceFloor  (const long stops_level_pts, const double point,
                                        const double atr, const double min_sl_atr_mult);
+   static bool       IsSLOnCorrectSide(const bool is_buy, const double entry, const double sl);
    static double     InitialTPPrice   (const bool is_buy,
                                        const double entry, const double sl,
                                        const double &sr_in_direction[]);
@@ -177,6 +178,18 @@ double CPositionManager::SLDistanceFloor(const long stops_level_pts, const doubl
    const double a = (stops_level_pts > 0 && point > 0) ? (double)stops_level_pts * point : 0.0;
    const double b = (atr > 0 && min_sl_atr_mult > 0)   ? min_sl_atr_mult * atr           : 0.0;
    return MathMax(a, b);
+  }
+
+//+------------------------------------------------------------------+
+//| Path A Stage 1.1: caller's signal generator can occasionally hand |
+//| us an SL on the wrong side of entry (e.g. A_SELL with sl below   |
+//| entry); the broker rejects those with retcode 10016 Invalid stops.|
+//| BUY needs sl<entry, SELL needs sl>entry. sl==entry is wrong-side |
+//| too (zero-distance stop).                                         |
+//+------------------------------------------------------------------+
+bool CPositionManager::IsSLOnCorrectSide(const bool is_buy, const double entry, const double sl)
+  {
+   return is_buy ? (sl < entry) : (sl > entry);
   }
 
 //+------------------------------------------------------------------+
@@ -292,6 +305,12 @@ bool CPositionManager::BuildPlan(const string sym_broker, const string sym_canon
    const double sl_dist = MathAbs(out.entry - out.sl);
    if(sl_dist <= 0)
      { out.invalid_reason = "sl_distance==0"; return false; }
+
+   //--- Path A Stage 1.1: reject signals whose SL is on the wrong side of entry
+   //--- (broker would reject with retcode 10016 Invalid stops).
+   if(!IsSLOnCorrectSide(out.is_buy, out.entry, out.sl))
+     { out.invalid_reason = StringFormat("SL on wrong side of entry (is_buy=%d entry=%.5f sl=%.5f)",
+                                          (int)out.is_buy, out.entry, out.sl); return false; }
 
    //--- Path A: reject if the structural SL is closer to entry than the floor
    //--- (broker stops level OR min_sl_atr_mult×ATR) — see SLDistanceFloor.

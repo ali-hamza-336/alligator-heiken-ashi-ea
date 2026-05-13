@@ -58,7 +58,7 @@ input int     Lips_Shift             = 3;
 input int     ATR_Period             = 14;
 input double  ATR_Mouth_Open_Mult    = 0.4;       // Lips-Jaw separation
 input double  ATR_SL_Buffer          = 0.2;       // beyond Jaw/swing
-input double  Min_SL_ATR_Mult        = 1.0;       // Path A: reject a signal whose structural SL is closer than this×ATR (or the broker stops level) to entry
+input double  Min_SL_ATR_Mult        = 0.3;       // Path A Stage 1.1: dialled back from 1.0 (rejected ~110 legit Type-A signals at ~0.6×ATR); reject only the truly tangled cases
 input double  ATR_Tangle_Tolerance   = 0.3;       // for "mouth closed" detection
 input double  Min_ATR_Ratio          = 0.5;       // dead market filter
 input double  Trail_ATR_Buffer       = 0.3;
@@ -104,8 +104,9 @@ input int     News_Block_Min_Before  = 15;
 input int     News_Block_Min_After   = 15;
 input string  News_Impact_Filter     = "High";    // High, Medium+, All
 
-//--- SYMBOLS (CSV list) — Path A Stage 1: dropped USDCAD & AUDUSD (consistent losers in the 12-mo backtest)
-input string  Trade_Symbols          = "EURUSD,GBPUSD,USDJPY,USDCHF,NZDUSD,XAUUSD,NAS100";
+//--- SYMBOLS (CSV list) — Path A Stage 1: dropped USDCAD & AUDUSD (consistent losers in the 12-mo backtest).
+//--- Stage 1.1: dropped NAS100 — every signal rejected (spread=NO) on IC Markets even with Spread_NAS100=200.
+input string  Trade_Symbols          = "EURUSD,GBPUSD,USDJPY,USDCHF,NZDUSD,XAUUSD";
 
 //--- SYSTEM
 input long    Magic_Number           = 20260503;
