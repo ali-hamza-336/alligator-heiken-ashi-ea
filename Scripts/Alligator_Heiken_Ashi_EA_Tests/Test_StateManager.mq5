@@ -54,6 +54,8 @@ void Test_InitDefault()
    AssertEqInt(s.trades_taken_today, 0, "default trades_taken_today == 0");
    AssertEqInt((long)s.open_trade_ticket, 0, "default open_trade_ticket == 0");
    Assert(s.initial_balance == 0.0, "InitDefault zeros initial_balance");
+   Assert(s.partial_done == false, "InitDefault zeros partial_done");
+   AssertEqInt((long)s.be_move_time, 0, "InitDefault zeros be_move_time");
 }
 
 //+------------------------------------------------------------------+
@@ -77,6 +79,8 @@ void Test_Roundtrip()
    w.open_trade_ticket   = 12345678;
    w.open_trade_cycle_id = "20260503_NY";
    w.initial_balance     = 12345.67;
+   w.partial_done        = true;
+   w.be_move_time        = D'2026.05.10 16:30:00';
    w.last_save_time      = D'2026.05.03 14:30:00';
 
    Assert(mgr.Save(w, fname), "Save returns true");
@@ -94,6 +98,8 @@ void Test_Roundtrip()
    AssertEqInt((long)r.open_trade_ticket, 12345678, "roundtrip open_trade_ticket");
    AssertEqStr(r.open_trade_cycle_id, "20260503_NY", "roundtrip open_trade_cycle_id");
    AssertEqDbl(r.initial_balance, 12345.67, 0.005, "initial_balance roundtrip");
+   Assert(r.partial_done == true, "partial_done roundtrip");
+   AssertEqInt((long)r.be_move_time, (long)w.be_move_time, "be_move_time roundtrip");
    AssertEqInt((long)r.last_save_time, (long)w.last_save_time, "roundtrip last_save_time");
 
    mgr.Delete(fname);
@@ -186,6 +192,48 @@ void Test_SaveOverwrite()
 }
 
 //+------------------------------------------------------------------+
+//| Test 7: Load on JSON missing Stage-2 optional fields keeps        |
+//| defaults and still returns true (legacy-tolerant pattern,         |
+//| mirrors Phase-7 initial_balance behaviour)                        |
+//+------------------------------------------------------------------+
+void Test_LoadLegacyMissingFields()
+{
+   Print("[Test_LoadLegacyMissingFields]");
+   CStateManager mgr;
+   const string fname = "test_state_legacy_missing.json";
+   mgr.Delete(fname);
+
+   // Hand-rolled fixture: all original fields present, partial_done +
+   // be_move_time omitted entirely (pre-Stage-2 file shape).
+   const string body =
+      "{\n"
+      "  \"streak_position\": 2,\n"
+      "  \"current_cycle_id\": \"20260503_NY\",\n"
+      "  \"tp_hit_in_cycle\": false,\n"
+      "  \"daily_loss_pct\": 0.450000,\n"
+      "  \"daily_loss_date\": \"2026-05-03\",\n"
+      "  \"last_sl_count\": 2,\n"
+      "  \"trades_taken_today\": 2,\n"
+      "  \"open_trade_ticket\": 12345678,\n"
+      "  \"open_trade_cycle_id\": \"20260503_NY\",\n"
+      "  \"initial_balance\": 12345.67,\n"
+      "  \"last_save_time\": \"2026-05-03T14:30:00Z\"\n"
+      "}\n";
+   int h = FileOpen(fname, FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(h == INVALID_HANDLE) { g_failed++; Print("  FAIL: could not create legacy fixture"); return; }
+   FileWriteString(h, body);
+   FileClose(h);
+
+   EAState r;
+   Assert(mgr.Load(r, fname), "Load returns true for legacy JSON missing Stage-2 fields");
+   AssertEqInt(r.streak_position, 2, "legacy: required field streak_position roundtrips");
+   Assert(r.partial_done == false, "legacy: missing partial_done stays false");
+   AssertEqInt((long)r.be_move_time, 0, "legacy: missing be_move_time stays 0");
+
+   mgr.Delete(fname);
+}
+
+//+------------------------------------------------------------------+
 //| Script entry                                                     |
 //+------------------------------------------------------------------+
 void OnStart()
@@ -197,6 +245,7 @@ void OnStart()
    Test_LoadCorrupt();
    Test_AtomicWriteCleanup();
    Test_SaveOverwrite();
+   Test_LoadLegacyMissingFields();
    PrintFormat("===== Done.  passed=%d  failed=%d =====", g_passed, g_failed);
 }
 //+------------------------------------------------------------------+
