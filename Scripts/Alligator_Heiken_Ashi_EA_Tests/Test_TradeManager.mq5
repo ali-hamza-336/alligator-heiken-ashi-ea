@@ -259,6 +259,24 @@ void Test_Decide_LipsBreak_Buy()
    Assert(d.action == MA_TIGHTEN_SL_LIPS, "BUY close<lips, pre-BE -> MA_TIGHTEN_SL_LIPS");
    AssertEqDbl(d.new_sl, 1.1000, 1e-9, "tighten SL clamped to entry (raw was above)");
 }
+void Test_Decide_TightenSL_Sell()
+{
+   Print("[Test_Decide_TightenSL_Sell]");
+   //  Stage 2 SELL mirror of Test_Decide_LipsBreak_Buy — closes the BUY/SELL symmetry gap in
+   //  Decide's integration of TightenLipsPrice + IsImprovement (Task C code-quality review).
+   //  SELL entry=1.1000 SL=1.1050 (R=0.005, SL above entry). close=1.0960 (-0.4R below entry
+   //  = +0.8R profit for SELL, below +1R trigger=1.0950 → no PartialAndBE).
+   //  close 1.0960 > lips 1.0950 → SELL Lips break (price moved against SELL).
+   //  TightenLipsPrice(false, lips=1.0950, atr=0.001, buf=0.3, entry=1.1000):
+   //    raw = lips + 0.3*atr = 1.0953. raw 1.0953 < entry 1.1000 → clamp to entry 1.1000.
+   //  IsImprovement(false, 1.1000, 1.1050) → 1.1000 < 1.1050 → true. d.new_sl = 1.1000.
+   ManageContext c = MakeCtx_BuyHealthy(1.1000, 1.1050, /*close*/1.0960, /*lips*/1.0950, 0.001);
+   c.is_buy = false;
+   c.entry_R_distance = MathAbs(1.1000 - 1.1050);   // re-snapshot for SELL-side R
+   const ManageDecision d = CTradeManager::Decide(c);
+   Assert(d.action == MA_TIGHTEN_SL_LIPS, "SELL close>lips, pre-BE -> MA_TIGHTEN_SL_LIPS");
+   AssertEqDbl(d.new_sl, 1.1000, 1e-9, "SELL tighten SL clamped to entry (raw was below)");
+}
 void Test_Decide_TrailWhenBEDone()
 {
    Print("[Test_Decide_TrailWhenBEDone]");
@@ -563,6 +581,7 @@ void OnStart()
    Test_Decide_NYOpenCarryover_WinsAll();
    Test_Decide_FridayClose();
    Test_Decide_LipsBreak_Buy();
+   Test_Decide_TightenSL_Sell();
    Test_Decide_TrailWhenBEDone();
    Test_Decide_TrailNoImprovement();
    Test_Decide_PartialAndBE_Buy();
