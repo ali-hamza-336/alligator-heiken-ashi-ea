@@ -72,6 +72,8 @@ public:
    static double     NormalizeLot     (const double raw_lot,
                                        const double vol_min, const double vol_max,
                                        const double vol_step);
+   static double     PartialLot       (const double current_lot, const double fraction,
+                                       const double vol_min, const double vol_step);
    static double     SLDistanceFloor  (const long stops_level_pts, const double point,
                                        const double atr, const double min_sl_atr_mult);
    static bool       IsSLOnCorrectSide(const bool is_buy, const double entry, const double sl);
@@ -160,6 +162,28 @@ double CPositionManager::NormalizeLot(const double raw_lot,
    if(stepped < vol_min) return 0.0;          // below broker min → caller skips
    if(stepped > vol_max) return vol_max;
    return NormalizeDouble(stepped, 8);
+  }
+
+//+------------------------------------------------------------------+
+//| Path A Stage 2: lots to close at the +1R partial-close trigger.  |
+//| Single-knob spectrum on `fraction`: 0.0 = no partial (returns 0; |
+//| caller does a BE-move only, no PositionClosePartial); 1.0 = full |
+//| close (1:1 fixed-RR baseline). Round DOWN to vol_step (same      |
+//| no-overshoot discipline as NormalizeLot). Close-full fallback:   |
+//| if either the partial or the runner would be below vol_min,      |
+//| return current_lot so the broker accepts the close (the runner   |
+//| would be untradeable on its own).                                |
+//+------------------------------------------------------------------+
+double CPositionManager::PartialLot(const double current_lot, const double fraction,
+                                    const double vol_min, const double vol_step)
+  {
+   if(fraction <= 0)                       return 0.0;
+   if(current_lot <= 0 || vol_step <= 0)   return 0.0;
+   const double raw     = fraction * current_lot;
+   const double partial = MathFloor(raw / vol_step) * vol_step;
+   if(partial < vol_min)                   return current_lot;
+   if((current_lot - partial) < vol_min)   return current_lot;
+   return NormalizeDouble(partial, 8);
   }
 
 //+------------------------------------------------------------------+

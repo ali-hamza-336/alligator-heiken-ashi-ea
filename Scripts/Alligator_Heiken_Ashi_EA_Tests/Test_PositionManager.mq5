@@ -262,6 +262,66 @@ void Test_SLSide_Sell_Below()
 }
 
 //==================================================================
+// PartialLot (Stage 2 — +1R partial-close lot sizing)
+//==================================================================
+void Test_PartialLot_CleanHalfSplit()
+{
+   Print("[Test_PartialLot_CleanHalfSplit]");
+   //  0.02 lot, fraction=0.5, step=0.01 → close 0.01, runner 0.01 (≥min).
+   AssertEqDbl(CPositionManager::PartialLot(0.02, 0.5, 0.01, 0.01),
+               0.01, 1e-9, "0.02 @ 0.5 → 0.01 (balanced split)");
+}
+void Test_PartialLot_FallbackTooSmall()
+{
+   Print("[Test_PartialLot_FallbackTooSmall]");
+   //  0.01 lot, fraction=0.5 → partial 0.005 < min → close FULL (runner
+   //  would be below vol_min).
+   AssertEqDbl(CPositionManager::PartialLot(0.01, 0.5, 0.01, 0.01),
+               0.01, 1e-9, "runner below min → close-full fallback");
+}
+void Test_PartialLot_RoundsDownToStep()
+{
+   Print("[Test_PartialLot_RoundsDownToStep]");
+   //  0.03 lot, fraction=0.5 → raw 0.015, rounds DOWN to 0.01 on step 0.01.
+   AssertEqDbl(CPositionManager::PartialLot(0.03, 0.5, 0.01, 0.01),
+               0.01, 1e-9, "0.015 rounds DOWN to 0.01");
+}
+void Test_PartialLot_FractionOne()
+{
+   Print("[Test_PartialLot_FractionOne]");
+   //  Fraction=1.0 = close-full path (1:1 fixed RR baseline on the spectrum).
+   AssertEqDbl(CPositionManager::PartialLot(0.10, 1.0, 0.01, 0.01),
+               0.10, 1e-9, "fraction=1 → close full");
+}
+void Test_PartialLot_FractionZero()
+{
+   Print("[Test_PartialLot_FractionZero]");
+   //  Fraction=0 is the "no partial, just BE move" signal — caller must
+   //  treat a 0 return as "skip PositionClosePartial, only ModifySL".
+   AssertEqDbl(CPositionManager::PartialLot(0.10, 0.0, 0.01, 0.01),
+               0.0, 1e-9, "fraction=0 → 0 (caller skips partial)");
+}
+void Test_PartialLot_GuardBadLot()
+{
+   Print("[Test_PartialLot_GuardBadLot]");
+   AssertEqDbl(CPositionManager::PartialLot(-0.01, 0.5, 0.01, 0.01),
+               0.0, 1e-9, "current_lot<=0 → 0");
+}
+void Test_PartialLot_GuardZeroStep()
+{
+   Print("[Test_PartialLot_GuardZeroStep]");
+   AssertEqDbl(CPositionManager::PartialLot(0.10, 0.5, 0.01, 0.0),
+               0.0, 1e-9, "vol_step<=0 → 0");
+}
+void Test_PartialLot_NonHalfFraction()
+{
+   Print("[Test_PartialLot_NonHalfFraction]");
+   //  0.10 lot, fraction=0.3 → raw 0.03 (clean on step 0.01); runner 0.07≥min.
+   AssertEqDbl(CPositionManager::PartialLot(0.10, 0.3, 0.01, 0.01),
+               0.03, 1e-9, "non-half fraction works");
+}
+
+//==================================================================
 // InitialTPPrice
 //==================================================================
 void Test_TP_BuyDefault2R_NoSR()
@@ -381,6 +441,14 @@ void OnStart()
    Test_SLSide_Sell_Ok();
    Test_SLSide_Sell_Equal();
    Test_SLSide_Sell_Below();
+   Test_PartialLot_CleanHalfSplit();
+   Test_PartialLot_FallbackTooSmall();
+   Test_PartialLot_RoundsDownToStep();
+   Test_PartialLot_FractionOne();
+   Test_PartialLot_FractionZero();
+   Test_PartialLot_GuardBadLot();
+   Test_PartialLot_GuardZeroStep();
+   Test_PartialLot_NonHalfFraction();
    Test_TP_BuyDefault2R_NoSR();
    Test_TP_BuySRClosedThan2R();
    Test_TP_BuySRBeyond5R_Default2R();
