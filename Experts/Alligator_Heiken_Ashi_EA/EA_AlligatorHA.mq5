@@ -38,7 +38,8 @@ input double  Risk_Position3         = 0.70;      // % per third trade
 input double  Max_Daily_Loss         = 1.50;      // % — hard stop for the day
 input int     Max_Streak_Length      = 3;         // SLs before streak reset
 input double  Max_Total_DD_Buffer    = 7.00;      // % below initial — emergency block
-input double  Max_Lot                = 50.0;      // Path A: hard ceiling on any single lot (belt-and-braces vs sizing blow-ups)
+//--- Path A: hard ceiling on any single lot (belt-and-braces vs sizing blow-ups).
+input double  Max_Lot                = 50.0;      // Max lots per trade
 
 //--- SESSION TIMES (NY local)
 input int     NY_Start_Hour          = 8;
@@ -58,7 +59,9 @@ input int     Lips_Shift             = 3;
 input int     ATR_Period             = 14;
 input double  ATR_Mouth_Open_Mult    = 0.4;       // Lips-Jaw separation
 input double  ATR_SL_Buffer          = 0.2;       // beyond Jaw/swing
-input double  Min_SL_ATR_Mult        = 0.3;       // Path A Stage 1.1: dialled back from 1.0 (rejected ~110 legit Type-A signals at ~0.6×ATR); reject only the truly tangled cases
+//--- Path A Stage 1.1: dialled back from 1.0 (rejected ~110 legit Type-A signals
+//--- at ~0.6×ATR). Now rejects only the truly tangled-Alligator cases.
+input double  Min_SL_ATR_Mult        = 0.3;       // Min SL distance (xATR)
 input double  ATR_Tangle_Tolerance   = 0.3;       // for "mouth closed" detection
 input double  Min_ATR_Ratio          = 0.5;       // dead market filter
 input double  Trail_ATR_Buffer       = 0.3;
@@ -90,8 +93,10 @@ input double  Spread_USDCHF          = 2.0;
 input double  Spread_AUDUSD          = 2.0;
 input double  Spread_USDCAD          = 2.0;
 input double  Spread_NZDUSD          = 2.0;
-input double  Spread_XAUUSD          = 50.0;      // Path A: was 30 (too tight on IC Markets gold); per-broker tunable
-input double  Spread_NAS100          = 200.0;     // Path A: was 2 (USTEC quotes ~90 pts on IC Markets); per-broker tunable
+//--- Path A: spread caps raised — XAUUSD was 30 (too tight on IC Markets gold),
+//--- NAS100 was 2 (USTEC quotes ~90 pts off-US-hours); both per-broker tunable.
+input double  Spread_XAUUSD          = 50.0;      // Max spread (XAUUSD, cents)
+input double  Spread_NAS100          = 200.0;     // Max spread (NAS100, points)
 
 //--- SLIPPAGE
 input int     Slippage_FX_Pips       = 3;
