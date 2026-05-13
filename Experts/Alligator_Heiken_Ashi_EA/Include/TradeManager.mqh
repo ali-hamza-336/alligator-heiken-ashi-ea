@@ -3,12 +3,17 @@
 //|  Phase 5 — break-even, trailing, forced exits, decide().         |
 //|  Phase 8 — Lips-break softening (ATR buffer / N-bar confirm /    |
 //|  min-hold bars); defaults reproduce §3.4 exactly.               |
+//|  Path A Stage 2 (Task C) — Decide rewrite:                       |
+//|    + MA_PARTIAL_AND_BE  (replaces MA_MOVE_BE; close partial @+1R)|
+//|    + MA_TIGHTEN_SL_LIPS (replaces MA_CLOSE_LIPS; pre-BE only)    |
+//|    + trail-delay gate (MA_TRAIL waits N bars after BE move)      |
+//|    + TightenLipsPrice pure helper                                |
 //|                                                                  |
 //|  Spec: §3.2 (BE), §3.3 (trail), §3.4 (forced exits),             |
 //|        §14 #1 (closed candles), §14 #2 (no per-tick).            |
 //|                                                                  |
 //|  Pure (unit-tested):                                             |
-//|    CalcBETrigger, CalcBESL, CalcTrailSL,                         |
+//|    CalcBETrigger, CalcBESL, CalcTrailSL, TightenLipsPrice,       |
 //|    IsImprovement, IsBeyondLips, Decide                           |
 //|  Live (integration-tested via EA):                               |
 //|    ModifySL, CloseAtMarket                                       |
@@ -20,12 +25,14 @@
 
 enum EManageAction
   {
-   MA_NONE         = 0,
-   MA_MOVE_BE      = 1,
-   MA_TRAIL        = 2,
-   MA_CLOSE_LIPS   = 3,
-   MA_CLOSE_FRIDAY = 4,
-   MA_CLOSE_NYOPEN = 5,
+   MA_NONE              = 0,
+   MA_MOVE_BE           = 1,   // DEPRECATED: removed in Task D; Decide no longer returns this
+   MA_TRAIL             = 2,
+   MA_CLOSE_LIPS        = 3,   // DEPRECATED: removed in Task D; Decide no longer returns this
+   MA_CLOSE_FRIDAY      = 4,
+   MA_CLOSE_NYOPEN      = 5,
+   MA_PARTIAL_AND_BE    = 6,   // Stage 2: at +trigger_R, partial-close + move SL to BE+buffer
+   MA_TIGHTEN_SL_LIPS   = 7,   // Stage 2: pre-BE Lips break, tighten SL to Lips ± buf×ATR (clamped to entry)
   };
 
 struct ManageDecision
@@ -61,28 +68,37 @@ struct ManageContext
    double            lips_m15_s2;
    double            close_m15_s3;             // two bars before s1 (0 = not available / not needed)
    double            lips_m15_s3;
+   //--- Stage 2: partial-close-and-BE + trail-delay
+   bool              partial_done;             // true after MA_PARTIAL_AND_BE has fired for this trade
+   double            partial_close_trigger_R;  // e.g. 1.0 → partial fires at entry ± 1×R
+   int               trail_delay_bars;         // MA_TRAIL suppressed until this many M15 bars after BE move
+   int               bars_since_BE_move;       // caller-computed from g_state.be_move_time
+   double            entry_R_distance;         // |entry - original_sl|, snapshotted by caller at entry
   };
 
 class CTradeManager
   {
 public:
    //--- Pure
-   static double          CalcBETrigger (const bool is_buy, const double entry,
-                                          const double sl, const double be_trigger_R);
-   static double          CalcBESL      (const bool is_buy, const double entry,
-                                          const double be_buffer_pips, const double pip);
-   static double          CalcTrailSL   (const bool is_buy, const double lips,
-                                          const double atr, const double trail_atr_buffer);
-   static bool            IsImprovement (const bool is_buy, const double new_sl,
-                                          const double current_sl);
-   static bool            IsBeyondLips  (const bool is_buy, const double close_price,
-                                          const double lips, const double buffer = 0.0);
-   static ManageDecision  Decide        (const ManageContext &ctx);
+   static double          CalcBETrigger    (const bool is_buy, const double entry,
+                                            const double sl, const double be_trigger_R);
+   static double          CalcBESL         (const bool is_buy, const double entry,
+                                            const double be_buffer_pips, const double pip);
+   static double          CalcTrailSL      (const bool is_buy, const double lips,
+                                            const double atr, const double trail_atr_buffer);
+   static double          TightenLipsPrice (const bool is_buy, const double lips_s1,
+                                            const double atr_m15_s1, const double trail_buf,
+                                            const double entry_price);
+   static bool            IsImprovement    (const bool is_buy, const double new_sl,
+                                            const double current_sl);
+   static bool            IsBeyondLips     (const bool is_buy, const double close_price,
+                                            const double lips, const double buffer = 0.0);
+   static ManageDecision  Decide           (const ManageContext &ctx);
 
    //--- Live
-   static bool            ModifySL      (const ulong ticket, const double new_sl,
-                                          const double tp);
-   static bool            CloseAtMarket (const ulong ticket, const int slippage_pts);
+   static bool            ModifySL         (const ulong ticket, const double new_sl,
+                                            const double tp);
+   static bool            CloseAtMarket    (const ulong ticket, const int slippage_pts);
   };
 
 //+------------------------------------------------------------------+
@@ -117,6 +133,28 @@ double CTradeManager::CalcTrailSL(const bool is_buy, const double lips,
   }
 
 //+------------------------------------------------------------------+
+//| Stage 2 / Approach C: Lips-break tighten price.                  |
+//| Pre-BE, a Lips break (close on the wrong side of the Lips line)  |
+//| no longer market-closes the trade (old MA_CLOSE_LIPS) — it now   |
+//| tightens the SL to Lips ± Trail_ATR_Buffer × ATR. Clamped to NOT |
+//| cross entry, so SL stays strictly on the loss side of entry      |
+//| pre-BE (post-BE the trail handles the same logic without clamp,  |
+//| since by then SL is already past entry).                         |
+//|                                                                  |
+//| Same offset shape as CalcTrailSL — reuses Trail_ATR_Buffer       |
+//| intentionally so a single knob controls how tight both behave.   |
+//+------------------------------------------------------------------+
+double CTradeManager::TightenLipsPrice(const bool is_buy, const double lips_s1,
+                                        const double atr_m15_s1, const double trail_buf,
+                                        const double entry_price)
+  {
+   const double offset = trail_buf * atr_m15_s1;
+   const double raw    = is_buy ? lips_s1 - offset : lips_s1 + offset;
+   if(is_buy)  return MathMin(raw, entry_price);
+   return MathMax(raw, entry_price);
+  }
+
+//+------------------------------------------------------------------+
 //| Spec §3.2/§3.3 last line — never move SL backward.               |
 //| BUY: improvement = new_sl strictly > current_sl                   |
 //| SELL: improvement = new_sl strictly < current_sl                  |
@@ -145,19 +183,23 @@ bool CTradeManager::IsBeyondLips(const bool is_buy, const double close_price,
   }
 
 //+------------------------------------------------------------------+
-//| Decide — single pass over the bar context. Priority order:       |
-//|   1. NY-open carryover   (spec §5.5 — wins over everything)      |
-//|   2. Friday close        (spec §5.7)                             |
-//|   3. Lips break          (spec §3.4 first bullet)                |
-//|   4. Trail (if BE done)  (spec §3.3 — only if improves)          |
-//|   5. BE move             (spec §3.2 — only if trigger reached    |
-//|                            AND BE not yet done)                  |
-//|   6. otherwise           MA_NONE                                 |
+//| Decide — single pass over the bar context. Stage 2 priority:     |
+//|   1. NY-open carryover     (spec §5.5 — wins over everything)    |
+//|   2. Friday close          (spec §5.7)                           |
+//|   3. Zero-close guard      (invariant #10)                       |
+//|   4. MA_PARTIAL_AND_BE     (Stage 2: at +trigger_R, !partial_done)|
+//|   5. MA_TIGHTEN_SL_LIPS    (Stage 2: Lips break, !partial_done,  |
+//|                              Phase-8 softening still gates it)   |
+//|   6. MA_TRAIL              (post-BE; gated by Trail_Delay_Bars)  |
+//|   7. otherwise             MA_NONE                               |
 //|                                                                  |
-//| BE-done detection: BUY → current_sl >= entry. SELL → current_sl  |
-//| <= entry. SL is initially placed strictly on the wrong side of   |
-//| entry by Phase 4 (SL = Jaw ± buffer), so this comparison cleanly |
-//| separates pre-BE from post-BE without a new state field.         |
+//| Stage 2 BE-done detection uses ctx.partial_done (explicit flag), |
+//| not current_sl >= entry. After partial fires, current_sl ≈ entry,|
+//| so the old derivation breaks down; the flag is cleaner.          |
+//|                                                                  |
+//| R = ctx.entry_R_distance (caller-snapshotted at entry). Used     |
+//| directly instead of MathAbs(entry - current_sl), since the latter|
+//| collapses to ~0 after BE move + would misfire PartialAndBE.      |
 //+------------------------------------------------------------------+
 ManageDecision CTradeManager::Decide(const ManageContext &ctx)
   {
@@ -172,16 +214,34 @@ ManageDecision CTradeManager::Decide(const ManageContext &ctx)
      { d.action = MA_CLOSE_FRIDAY; d.reason = "Friday close hour reached (NY)";        return d; }
    //--- No closed-bar data for the open position's symbol on this event
    //--- (caller passes 0 sentinels when the new M15 bar belongs to a
-   //--- different symbol than the open position). Price-based actions —
-   //--- Lips break, BE move, trail — need a real close; skip them. The
-   //--- time-based exits above still fire regardless.
+   //--- different symbol than the open position). Price-based actions
+   //--- (PartialAndBE, TightenSLLips, trail) need a real close; skip them.
+   //--- The time-based exits above still fire regardless. Invariant #10.
    if(ctx.close_m15_s1 <= 0.0)
       return d;
 
-   //--- Phase 8: Lips-break softening — min-hold gate, then ATR buffer, then
-   //--- N-bar confirm. All three default to the spec no-op (buffer 0, confirm
-   //--- <= 1, min_hold 0), so a default context = the exact §3.4 behaviour.
-   if(ctx.bars_since_entry >= ctx.lips_break_min_hold_bars)
+   //--- Stage 2 step 4: MA_PARTIAL_AND_BE — only pre-partial, at +trigger_R.
+   if(!ctx.partial_done)
+     {
+      const double trig_price = ctx.is_buy
+                                ? ctx.entry + ctx.partial_close_trigger_R * ctx.entry_R_distance
+                                : ctx.entry - ctx.partial_close_trigger_R * ctx.entry_R_distance;
+      const bool reached = ctx.is_buy ? (ctx.close_m15_s1 >= trig_price)
+                                      : (ctx.close_m15_s1 <= trig_price);
+      if(reached)
+        {
+         const double be_sl = CalcBESL(ctx.is_buy, ctx.entry, ctx.be_buffer_pips, ctx.pip);
+         d.action = MA_PARTIAL_AND_BE;
+         d.new_sl = be_sl;
+         d.reason = StringFormat("partial+BE: close=%.5f %s trigger=%.5f -> SL %.5f",
+                                 ctx.close_m15_s1, ctx.is_buy ? ">=" : "<=", trig_price, be_sl);
+         return d;
+        }
+     }
+
+   //--- Stage 2 step 5: MA_TIGHTEN_SL_LIPS — only pre-partial (post-BE trail covers).
+   //--- Phase-8 softening (min-hold, ATR buffer, N-bar confirm) gates it.
+   if(!ctx.partial_done && ctx.bars_since_entry >= ctx.lips_break_min_hold_bars)
      {
       const double lb_buf = ctx.lips_break_atr_buffer * ctx.atr_m15_s1;
       bool broken = IsBeyondLips(ctx.is_buy, ctx.close_m15_s1, ctx.lips_m15_s1, lb_buf);
@@ -191,20 +251,23 @@ ManageDecision CTradeManager::Decide(const ManageContext &ctx)
          broken = IsBeyondLips(ctx.is_buy, ctx.close_m15_s3, ctx.lips_m15_s3, lb_buf);
       if(broken)
         {
-         d.action = MA_CLOSE_LIPS;
-         d.reason = StringFormat("Lips break: close=%.5f %s lips=%.5f (buf=%.5f confirm=%d hold=%d/%d)",
-                                 ctx.close_m15_s1, ctx.is_buy ? "<" : ">", ctx.lips_m15_s1,
-                                 lb_buf, ctx.lips_break_confirm_bars,
-                                 ctx.bars_since_entry, ctx.lips_break_min_hold_bars);
-         return d;
+         const double tighten = TightenLipsPrice(ctx.is_buy, ctx.lips_m15_s1, ctx.atr_m15_s1,
+                                                 ctx.trail_atr_buffer, ctx.entry);
+         if(IsImprovement(ctx.is_buy, tighten, ctx.current_sl))
+           {
+            d.action = MA_TIGHTEN_SL_LIPS;
+            d.new_sl = tighten;
+            d.reason = StringFormat("tighten SL on Lips break: close=%.5f %s lips=%.5f (buf=%.5f confirm=%d) -> SL %.5f",
+                                    ctx.close_m15_s1, ctx.is_buy ? "<" : ">", ctx.lips_m15_s1,
+                                    lb_buf, ctx.lips_break_confirm_bars, tighten);
+            return d;
+           }
+         //--- broken but not an improvement -> fall through to trail / none
         }
      }
 
-   //--- BE-done detection (no extra state field — see comment above)
-   const bool be_done = ctx.is_buy ? (ctx.current_sl >= ctx.entry)
-                                   : (ctx.current_sl <= ctx.entry && ctx.current_sl > 0);
-
-   if(be_done)
+   //--- Stage 2 step 6: MA_TRAIL — post-BE only, gated by trail_delay_bars.
+   if(ctx.partial_done && ctx.bars_since_BE_move >= ctx.trail_delay_bars)
      {
       const double trail = CalcTrailSL(ctx.is_buy, ctx.lips_m15_s1, ctx.atr_m15_s1,
                                        ctx.trail_atr_buffer);
@@ -217,21 +280,8 @@ ManageDecision CTradeManager::Decide(const ManageContext &ctx)
                                  ctx.atr_m15_s1, ctx.trail_atr_buffer, trail);
          return d;
         }
-      return d;   // BE done but no improvement → no-op
      }
 
-   //--- BE not done yet — check trigger
-   const double trigger = CalcBETrigger(ctx.is_buy, ctx.entry, ctx.current_sl, ctx.be_trigger_R);
-   const bool   reached = ctx.is_buy ? (ctx.close_m15_s1 >= trigger)
-                                     : (ctx.close_m15_s1 <= trigger);
-   if(reached)
-     {
-      const double be_sl = CalcBESL(ctx.is_buy, ctx.entry, ctx.be_buffer_pips, ctx.pip);
-      d.action = MA_MOVE_BE;
-      d.new_sl = be_sl;
-      d.reason = StringFormat("BE trigger reached: close=%.5f %s trigger=%.5f -> SL %.5f",
-                              ctx.close_m15_s1, ctx.is_buy ? ">=" : "<=", trigger, be_sl);
-     }
    return d;
   }
 
