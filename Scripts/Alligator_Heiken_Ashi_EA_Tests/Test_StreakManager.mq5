@@ -69,18 +69,6 @@ void Test_Mode_After3SLsIsLocked()
    AssertEqInt(s.last_sl_count, 3, "last_sl_count = 3");
    AssertEqInt(s.streak_position, 3, "streak_position clamped at 3");
 }
-void Test_Forced_LipsBreakAdvancesStreak()
-{
-   Print("[Test_Forced_LipsBreakAdvancesStreak]");
-   EAState s = MakeFresh();
-   //  Stage 2: FCR_LIPS_BREAK is gone (Lips break is now MA_TIGHTEN_SL_LIPS, not a close).
-   //  Verify FCR_FRIDAY_CLOSE is a streak no-op instead.
-   const int sp_before  = s.streak_position;
-   const int slc_before = s.last_sl_count;
-   CStreakManager::OnForcedClose(s, FCR_FRIDAY_CLOSE, 3);
-   AssertEqInt(s.streak_position, sp_before,  "Friday close: streak_position unchanged");
-   AssertEqInt(s.last_sl_count,   slc_before, "Friday close: last_sl_count unchanged");
-}
 void Test_Forced_FridayCloseDoesNotAdvance()
 {
    Print("[Test_Forced_FridayCloseDoesNotAdvance]");
@@ -151,7 +139,6 @@ void OnStart()
    Test_Mode_AfterOneSLIsRecovery();
    Test_Mode_AfterTPIsLocked();
    Test_Mode_After3SLsIsLocked();
-   Test_Forced_LipsBreakAdvancesStreak();
    Test_Forced_FridayCloseDoesNotAdvance();
    Test_Forced_NYCarryoverDoesNotAdvance();
    Test_Reset_ZerosCounters();

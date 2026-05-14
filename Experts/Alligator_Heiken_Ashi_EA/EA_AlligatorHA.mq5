@@ -813,6 +813,8 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
             g_state.partial_done = true;
             g_state.be_move_time = bar_time;
            }
+         else
+            Log.Error(StringFormat("MANAGE PARTIAL_AND_BE (BE-only) ModifySL failed ticket=%I64u", g_state.open_trade_ticket), pos_sym);
         }
       else if(partial_lot >= current_pos_lot - 1e-9)
         {
@@ -876,7 +878,7 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
                                       g_state.daily_loss_pct,
                                       current_pos_lot - partial_lot, d.new_sl));
             else
-               Log.Error(StringFormat("    HALF-STATE: partial fired (lot %.2f closed) but ModifySL FAILED for ticket=%I64u — runner has no BE protection. partial_done=true set to avoid double-partial; please manually inspect.",
+               Log.Error(StringFormat("    [HALFSTATE] partial fired (lot %.2f closed) but ModifySL FAILED for ticket=%I64u -- runner has no BE protection. partial_done=true set to avoid double-partial; please manually inspect.",
                                        partial_lot, g_state.open_trade_ticket), pos_sym);
            }
         }
