@@ -959,37 +959,42 @@ bool ResolveClosedPosition(const ulong ticket)
                                           StringFormat("OTHER(%I64d)", reason);
       Log.Info(StringFormat("Resolve: ticket=%I64u %s closed by %s P/L=%.2f",
                              ticket, sym, reason_str, profit));
-      //  Phase 6: feed realized P/L into daily-loss counter (loss-only).
-      //  Skip DEAL_REASON_EXPERT — EvaluateOpenPosition's MA_CLOSE_* branch
-      //  already called ApplyRealizedProfit using POSITION_PROFIT before the
-      //  close. This guard makes the invariant structural, not just flow-order.
-      if(reason != DEAL_REASON_EXPERT)
+      //  Stage 2: if partial_done is already true, the streak was booked
+      //  at the partial moment in EvaluateOpenPosition. The runner's final
+      //  close therefore: applies realized profit for daily-loss tracking,
+      //  but does NOT update the streak (would double-count).
+      if(g_state.partial_done && reason != DEAL_REASON_EXPERT)
+        {
+         CDailyLossManager::ApplyRealizedProfit(g_state, profit, g_day_start_equity);
+         Log.Info(StringFormat("Resolve: ticket=%I64u runner closed by %s P/L=%.2f — streak unchanged (booked at partial)",
+                                ticket, reason_str, profit));
+        }
+      else if(reason != DEAL_REASON_EXPERT)
         {
          CDailyLossManager::ApplyRealizedProfit(g_state, profit, g_day_start_equity);
          if(profit < 0)
             Log.Info(StringFormat("Resolve: daily_loss_pct -> %.4f%% (after %.2f loss)",
                                    g_state.daily_loss_pct, profit));
+         if(reason == DEAL_REASON_TP)
+           {
+            CStreakManager::OnTPClose(g_state);
+            Log.Info("Resolve: TP -> cycle locked (mode now LOCKED)");
+           }
+         else if(reason == DEAL_REASON_SL)
+           {
+            CStreakManager::OnSLClose(g_state, Max_Streak_Length);
+            const ETradingMode m = CStreakManager::DeriveMode(g_state, Max_Streak_Length);
+            Log.Info(StringFormat("Resolve: SL -> streak_position=%d last_sl=%d mode=%s",
+                                   g_state.streak_position, g_state.last_sl_count,
+                                   m == MODE_LOCKED ? "LOCKED" :
+                                   (m == MODE_RECOVERY ? "RECOVERY" : "DEFAULT")));
+           }
         }
-      if(reason == DEAL_REASON_TP)
+      else
         {
-         CStreakManager::OnTPClose(g_state);
-         Log.Info("Resolve: TP -> cycle locked (mode now LOCKED)");
-        }
-      else if(reason == DEAL_REASON_SL)
-        {
-         CStreakManager::OnSLClose(g_state, Max_Streak_Length);
-         const ETradingMode m = CStreakManager::DeriveMode(g_state, Max_Streak_Length);
-         Log.Info(StringFormat("Resolve: SL -> streak_position=%d last_sl=%d mode=%s",
-                                g_state.streak_position, g_state.last_sl_count,
-                                m == MODE_LOCKED ? "LOCKED" :
-                                (m == MODE_RECOVERY ? "RECOVERY" : "DEFAULT")));
-        }
-      else if(reason == DEAL_REASON_EXPERT)
-        {
-         //  Our own forced close — Lips break / Friday flatten / NY carryover.
-         //  The forced-close branch in EvaluateOpenPosition already advanced
-         //  state via CStreakManager::OnForcedClose; nothing to do here.
-         Log.Info("Resolve: EA-side forced close (already accounted)");
+         //  DEAL_REASON_EXPERT — Friday flatten / NY carryover / partial close-full.
+         //  Dispatch in EvaluateOpenPosition already updated streak + daily-loss inline.
+         Log.Info("Resolve: EA-side close (already accounted)");
         }
       return true;
      }
