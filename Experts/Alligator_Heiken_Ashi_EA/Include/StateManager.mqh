@@ -22,6 +22,7 @@ struct EAState
    double   initial_balance;
    bool     partial_done;             // Stage 2: +1R partial fired for the current open trade
    datetime be_move_time;             // Stage 2: bar time at which MA_PARTIAL_AND_BE moved SL to BE
+   double   entry_R_distance;         // Stage 2: |entry - initial_sl|, snapshotted at fill; survives partial/tighten SL moves
    datetime last_save_time;
   };
 
@@ -62,6 +63,7 @@ void CStateManager::InitDefault(EAState &state)
    state.initial_balance     = 0.0;
    state.partial_done        = false;
    state.be_move_time        = 0;
+   state.entry_R_distance    = 0.0;
    state.last_save_time      = 0;
   }
 
@@ -136,6 +138,7 @@ bool CStateManager::Load(EAState &state, const string filename)
    if(ExtractDouble(body, "initial_balance", l_dbl)) state.initial_balance = l_dbl;  // legacy files lack it -> stays 0
    if(ExtractBool  (body, "partial_done",    l_bool)) state.partial_done   = l_bool; // legacy files lack it -> stays false
    if(ExtractString(body, "be_move_time",    l_str))  state.be_move_time   = ParseIsoUtc(l_str); // legacy files lack it -> stays 0
+   if(ExtractDouble(body, "entry_R_distance", l_dbl)) state.entry_R_distance = l_dbl; // legacy files lack it -> stays 0
 
    return true;
   }
@@ -173,6 +176,7 @@ string CStateManager::Serialize(const EAState &state) const
    s += StringFormat("  \"initial_balance\": %.2f,\n",       state.initial_balance);
    s += StringFormat("  \"partial_done\": %s,\n",            state.partial_done ? "true" : "false");
    s += StringFormat("  \"be_move_time\": \"%s\",\n",        FormatIsoUtc(state.be_move_time));
+   s += StringFormat("  \"entry_R_distance\": %.5f,\n",     state.entry_R_distance);
    s += StringFormat("  \"last_save_time\": \"%s\"\n",    FormatIsoUtc(state.last_save_time));
    s += "}\n";
    return s;

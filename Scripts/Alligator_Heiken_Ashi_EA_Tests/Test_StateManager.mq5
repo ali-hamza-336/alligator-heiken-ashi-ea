@@ -56,6 +56,7 @@ void Test_InitDefault()
    Assert(s.initial_balance == 0.0, "InitDefault zeros initial_balance");
    Assert(s.partial_done == false, "InitDefault zeros partial_done");
    AssertEqInt((long)s.be_move_time, 0, "InitDefault zeros be_move_time");
+   AssertEqDbl(s.entry_R_distance, 0.0, 1e-9, "default entry_R_distance");
 }
 
 //+------------------------------------------------------------------+
@@ -81,6 +82,7 @@ void Test_Roundtrip()
    w.initial_balance     = 12345.67;
    w.partial_done        = true;
    w.be_move_time        = D'2026.05.10 16:30:00';
+   w.entry_R_distance    = 0.00500;
    w.last_save_time      = D'2026.05.03 14:30:00';
 
    Assert(mgr.Save(w, fname), "Save returns true");
@@ -100,6 +102,7 @@ void Test_Roundtrip()
    AssertEqDbl(r.initial_balance, 12345.67, 0.005, "initial_balance roundtrip");
    Assert(r.partial_done == true, "partial_done roundtrip");
    AssertEqInt((long)r.be_move_time, (long)w.be_move_time, "be_move_time roundtrip");
+   AssertEqDbl(r.entry_R_distance, 0.005, 1e-6, "entry_R_distance roundtrip");
    AssertEqInt((long)r.last_save_time, (long)w.last_save_time, "roundtrip last_save_time");
 
    mgr.Delete(fname);
@@ -229,6 +232,7 @@ void Test_LoadLegacyMissingFields()
    AssertEqInt(r.streak_position, 2, "legacy: required field streak_position roundtrips");
    Assert(r.partial_done == false, "legacy: missing partial_done stays false");
    AssertEqInt((long)r.be_move_time, 0, "legacy: missing be_move_time stays 0");
+   AssertEqDbl(r.entry_R_distance, 0.0, 1e-9, "legacy load: entry_R_distance defaults to 0");
 
    mgr.Delete(fname);
 }
