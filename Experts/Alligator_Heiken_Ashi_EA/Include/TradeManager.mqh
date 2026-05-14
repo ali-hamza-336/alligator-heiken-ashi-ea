@@ -26,9 +26,7 @@
 enum EManageAction
   {
    MA_NONE              = 0,
-   MA_MOVE_BE           = 1,   // DEPRECATED: removed in Task D; Decide no longer returns this
    MA_TRAIL             = 2,
-   MA_CLOSE_LIPS        = 3,   // DEPRECATED: removed in Task D; Decide no longer returns this
    MA_CLOSE_FRIDAY      = 4,
    MA_CLOSE_NYOPEN      = 5,
    MA_PARTIAL_AND_BE    = 6,   // Stage 2: at +trigger_R, partial-close + move SL to BE+buffer

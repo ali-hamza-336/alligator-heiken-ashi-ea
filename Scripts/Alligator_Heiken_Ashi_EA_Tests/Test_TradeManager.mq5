@@ -445,35 +445,6 @@ void Test_Decide_NoLipsBreakPostBE()
    Assert(d.action == MA_TRAIL, "post-BE, close<lips -> MA_TRAIL (not MA_TIGHTEN_SL_LIPS)");
    Assert(d.action != MA_TIGHTEN_SL_LIPS, "post-BE never returns MA_TIGHTEN_SL_LIPS");
 }
-void Test_Decide_NeverReturnsDeprecatedEnums()
-{
-   Print("[Test_Decide_NeverReturnsDeprecatedEnums]");
-   //  Run a handful of scenarios that previously returned MA_MOVE_BE / MA_CLOSE_LIPS;
-   //  assert Decide never returns the deprecated values anymore.
-   //  Scenario A: +1R reached, !partial_done -> Stage 2 fires MA_PARTIAL_AND_BE, NOT MA_MOVE_BE.
-   {
-      ManageContext c = MakeCtx_BuyHealthy(1.1000, 1.0950, 1.1060, 1.1055, 0.001);
-      const EManageAction a = CTradeManager::Decide(c).action;
-      Assert(a != MA_MOVE_BE,    "scenario A: never returns MA_MOVE_BE");
-      Assert(a != MA_CLOSE_LIPS, "scenario A: never returns MA_CLOSE_LIPS");
-   }
-   //  Scenario B: Lips break pre-BE -> Stage 2 fires MA_TIGHTEN_SL_LIPS, NOT MA_CLOSE_LIPS.
-   {
-      ManageContext c = MakeCtx_BuyHealthy(1.1000, 1.0950, 1.1040, 1.1050, 0.001);
-      const EManageAction a = CTradeManager::Decide(c).action;
-      Assert(a != MA_CLOSE_LIPS, "scenario B: never returns MA_CLOSE_LIPS");
-      Assert(a != MA_MOVE_BE,    "scenario B: never returns MA_MOVE_BE");
-   }
-   //  Scenario C: post-BE, trail improves -> MA_TRAIL (sanity, not deprecated).
-   {
-      ManageContext c = MakeCtx_BuyHealthy(1.1000, 1.1002, 1.1090, 1.1080, 0.001);
-      c.partial_done = true; c.bars_since_BE_move = 99;
-      const EManageAction a = CTradeManager::Decide(c).action;
-      Assert(a != MA_MOVE_BE,    "scenario C: never returns MA_MOVE_BE");
-      Assert(a != MA_CLOSE_LIPS, "scenario C: never returns MA_CLOSE_LIPS");
-   }
-}
-
 //==================================================================
 // Decide — zero-close sentinel guard (cross-symbol bar events)
 //==================================================================
@@ -595,7 +566,6 @@ void OnStart()
    Test_Decide_TrailDelay_Suppressed();
    Test_Decide_TrailDelay_Elapsed();
    Test_Decide_NoLipsBreakPostBE();
-   Test_Decide_NeverReturnsDeprecatedEnums();
    Test_Decide_ZeroCloseSellNoAction();
    Test_Decide_ZeroCloseBuyNoAction();
    Test_Decide_ZeroCloseTimeExitStillFires();

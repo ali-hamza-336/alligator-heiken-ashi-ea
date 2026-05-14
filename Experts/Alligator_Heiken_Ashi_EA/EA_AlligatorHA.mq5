@@ -909,8 +909,6 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
       else
          Log.Error(StringFormat("MANAGE CloseAtMarket failed ticket=%I64u", g_state.open_trade_ticket), pos_sym);
      }
-   //  Note: no MA_MOVE_BE / MA_CLOSE_LIPS handlers — Decide never returns those post-Task-C
-   //  (Task 7 removes them from the enum).
 
    if(action_ok)
      {
