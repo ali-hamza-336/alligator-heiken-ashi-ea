@@ -64,13 +64,20 @@ input double  ATR_SL_Buffer          = 0.2;       // beyond Jaw/swing
 input double  Min_SL_ATR_Mult        = 0.3;       // Min SL distance (xATR)
 input double  ATR_Tangle_Tolerance   = 0.3;       // for "mouth closed" detection
 input double  Min_ATR_Ratio          = 0.5;       // dead market filter
-input double  Trail_ATR_Buffer       = 0.3;
+input double  Trail_ATR_Buffer       = 0.5;
 input double  BE_Trigger_R           = 1.0;
 input double  BE_Buffer_Pips         = 2.0;
 //--- Lips-break exit softening (Phase 8 — defaults reproduce spec §3.4 exactly)
 input double  LipsBreak_ATR_Buffer   = 0.0;       // 0 = spec; break needs close past Lips by >= mult*ATR
-input int     LipsBreak_Confirm_Bars = 1;         // 1 = spec; 2..3 = require last N M15 closes all beyond Lips
+input int     LipsBreak_Confirm_Bars = 2;         // 2 = Phase-8 tuned-good; 1 = spec §3.4; 3 = stricter
 input int     LipsBreak_Min_Hold_Bars= 0;         // 0 = spec; no Lips-break exit in the first N M15 bars after entry
+
+//--- Stage 2 (Path A): partial-close-at-+1R spectrum + trail-delay gate
+//--- See docs/2026-05-13-path-a-stage2.md. Fraction=0 → BE-only (no partial);
+//--- Fraction=1 → 1:1 RR baseline; default 0.5 banks half, runner trails.
+input double  Partial_Close_Fraction  = 0.5;      // Partial size at +1R (0..1)
+input double  Partial_Close_Trigger_R = 1.0;      // Partial fires at +N*R
+input int     Trail_Delay_Bars        = 2;        // M15 bars post-BE before trail starts
 
 //--- TREND/STRENGTH FILTERS
 input int     ADX_Period             = 14;
@@ -966,6 +973,12 @@ bool ValidateInputs()
    if(LipsBreak_Min_Hold_Bars < 0)                  { Log.Error("LipsBreak_Min_Hold_Bars must be >= 0"); return false; }
    if(Min_SL_ATR_Mult < 0)                          { Log.Error("Min_SL_ATR_Mult must be >= 0");      return false; }
    if(Max_Lot <= 0)                                 { Log.Error("Max_Lot must be > 0");               return false; }
+   if(Partial_Close_Fraction < 0.0 || Partial_Close_Fraction > 1.0)
+      { Log.Error("Partial_Close_Fraction must be in [0.0, 1.0]"); return false; }
+   if(Partial_Close_Trigger_R < 0.5 || Partial_Close_Trigger_R > 3.0)
+      { Log.Error("Partial_Close_Trigger_R must be in [0.5, 3.0]"); return false; }
+   if(Trail_Delay_Bars < 0 || Trail_Delay_Bars > 10)
+      { Log.Error("Trail_Delay_Bars must be in [0, 10]"); return false; }
    return true;
   }
 
