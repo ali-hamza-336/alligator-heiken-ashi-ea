@@ -1,7 +1,7 @@
-# Stage 2 Approach C Revert — Plan for Next Session
+# Stage 2 Approach C Revert — Plan + Result
 
 **Date:** 2026-05-15
-**Status:** designed, ready to implement
+**Status:** ✅ SHIPPED 2026-05-15 — backtest reproduces *better* than expected (+$2,957.76 vs the +$2,474 Stage 1.1 target). See "Result" section at the bottom of this file.
 **Audience:** next session's Claude, picking this up cold
 
 **Read before starting:**
@@ -225,3 +225,28 @@ Expected count: 28 (was 26 after Task 7's cleanup; +2 for the restored Lips-brea
 7. Update CLAUDE.md (project status + invariants + file layout + heads-up).
 8. Second commit: `"Path A Stage 2: post-revert status + walk-forward result"`.
 9. Push the bundle.
+
+## Result (shipped 2026-05-15)
+
+Implementation went exactly per plan. All 5 code changes shipped (the 3 unstaged files from the prior session were verified clean and kept as-is; tests updated to match). Test suite all green: Test_TradeManager 62/62, Test_StreakManager 28/28 (was 26 — +2 for restored `Test_Forced_LipsBreakAdvancesStreak`), all 12 other scripts unchanged. EA compiled 0 errors / 0 warnings.
+
+**Backtest re-baseline** (Strategy Tester, EURUSD M15, every-tick-real-ticks, $100k, 2025-05-12 → 2026-05-11, defaults including `Partial_Close_Trigger_R=3.0` + `Trail_ATR_Buffer=0.3`):
+
+| Metric | Result | Target (Stage 1.1) | Delta |
+|---|---|---|---|
+| Final balance | **$102,957.76** | $102,474 | **+$483** |
+| Net profit | +$2,957.76 (+2.96%) | +$2,474 | +$483 |
+| Profit factor | 1.0557 | 1.046 | +0.010 |
+| Total trades | 366 | 372 | −6 |
+| Win rate | 45.36% (166/366) | 45.7% | ≈ |
+| Max DD (balance) | 5.30% ($5,453) | 5.65% | better |
+| Avg hold | 1h 30m 52s | 1h 30m | ≈ |
+| Worst losing streak | 11 trades, −$3,499 | 11, −$3,499 | identical |
+
+**The +$483 surplus is NOT broker-tick drift** (which the plan estimated at ±$200). It's a real architectural side-effect of Task D: `MA_MOVE_BE` was folded into `MA_PARTIAL_AND_BE`, and `MA_TRAIL` is gated on `partial_done` (invariant #17). At `Partial_Close_Trigger_R=3.0` (post-revert default), no trade reaches +3R, so `MA_PARTIAL_AND_BE` never fires, `partial_done` stays `false`, and `MA_TRAIL` is also suppressed. So the post-revert config is effectively **Lips-close-only, no BE-move, no trail** — a stricter config than original Stage 1.1.
+
+**Finding:** on this 12-mo sample, BE+trail was net-negative by ~$483. Lips-close alone captures more profit than Lips-close+BE+trail did in original Stage 1.1 (`7fff5ae`). This is consistent with Task E's audit logic — the simpler exit mechanism wins.
+
+**User decision (2026-05-15):** accept +$2,957.76 as the new baseline (Option A) rather than restore exact Stage 1.1 semantics via `Trigger_R=1.0` + `Fraction=0.0` (Option B). The Stage-2 partial-and-BE+trail infrastructure stays in the codebase, dormant by default — flip those two inputs to re-enable for any future experiment.
+
+**Walk-forward target moves to +$2,957.76** (not $2,474). 8mo train / 4mo test split, no params to tune; just an out-of-sample EV check.

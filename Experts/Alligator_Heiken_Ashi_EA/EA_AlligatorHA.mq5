@@ -74,7 +74,7 @@ input double  ATR_SL_Buffer          = 0.2;
 input double  Min_SL_ATR_Mult        = 0.3;
 input double  ATR_Tangle_Tolerance   = 0.3;
 input double  Min_ATR_Ratio          = 0.5;
-input double  Trail_ATR_Buffer       = 0.5;
+input double  Trail_ATR_Buffer       = 0.3;
 input double  BE_Trigger_R           = 1.0;
 input double  BE_Buffer_Pips         = 2.0;
 
@@ -88,11 +88,16 @@ input int     LipsBreak_Confirm_Bars = 2;
 input int     LipsBreak_Min_Hold_Bars= 0;
 
 //--- STAGE 2 PARTIAL-CLOSE-AT-+1R + TRAIL-DELAY (Path A). See docs/2026-05-13-path-a-stage2.md.
-//--- Partial_Close_Fraction: fraction of lot closed at +trigger R. 0 = BE-only (no partial); 1 = close full (1:1 RR baseline); 0.5 = banks half, runner trails (default).
-//--- Partial_Close_Trigger_R: at how many R the partial fires.
-//--- Trail_Delay_Bars: M15 bars post-BE before MA_TRAIL starts firing.
+//--- POST-REVERT STATUS (2026-05-15): Task E backtests proved the partial-then-runner
+//--- architecture is net-negative on this signal+data (no trade reaches +2R, runner adds ~$0,
+//--- avg win caps too tight). Defaults moved to make the mechanism dormant:
+//---   Partial_Close_Trigger_R = 3.0 -> no trade reaches +3R, MA_PARTIAL_AND_BE never fires
+//--- Infrastructure is kept in place for future experiments. To re-enable, drop Trigger_R to 1.0.
+//--- Partial_Close_Fraction: fraction of lot closed at +trigger R. Inert at Trigger_R=3.0 default.
+//--- Partial_Close_Trigger_R: at how many R the partial fires. 3.0 = effectively disabled.
+//--- Trail_Delay_Bars: M15 bars post-BE before MA_TRAIL starts firing. Inert at Trigger_R=3.0.
 input double  Partial_Close_Fraction  = 0.5;
-input double  Partial_Close_Trigger_R = 1.0;
+input double  Partial_Close_Trigger_R = 3.0;
 input int     Trail_Delay_Bars        = 2;
 
 //--- TREND/STRENGTH FILTERS
@@ -900,9 +905,11 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
            }
         }
      }
-   else if(d.action == MA_CLOSE_FRIDAY || d.action == MA_CLOSE_NYOPEN)
+   else if(d.action == MA_CLOSE_FRIDAY || d.action == MA_CLOSE_NYOPEN || d.action == MA_CLOSE_LIPS)
      {
-      const string label = (d.action == MA_CLOSE_FRIDAY) ? "CLOSE_FRIDAY" : "CLOSE_NYOPEN";
+      const string label = (d.action == MA_CLOSE_FRIDAY) ? "CLOSE_FRIDAY"
+                         : (d.action == MA_CLOSE_NYOPEN) ? "CLOSE_NYOPEN"
+                                                         : "CLOSE_LIPS";
       const double pre_close_profit = PositionGetDouble(POSITION_PROFIT);
       Log.Info(StringFormat("MANAGE %s ticket=%I64u %s slip=%dpts (%s)",
                              pos_sym, g_state.open_trade_ticket, label, slip, d.reason), pos_sym);
@@ -910,9 +917,13 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
       if(action_ok)
         {
          const EForcedCloseReason fcr =
-            (d.action == MA_CLOSE_FRIDAY) ? FCR_FRIDAY_CLOSE : FCR_NY_CARRYOVER;
-         //  Stage 2: if partial_done is already true, the streak was booked at
-         //  the partial moment — don't double-count. Daily-loss still applies.
+            (d.action == MA_CLOSE_FRIDAY) ? FCR_FRIDAY_CLOSE :
+            (d.action == MA_CLOSE_NYOPEN) ? FCR_NY_CARRYOVER :
+                                            FCR_LIPS_BREAK;
+         //  If partial_done is already true (dormant at default but possible if user re-enables
+         //  Stage 2's partial), the streak was booked at the partial moment — don't double-count.
+         //  Daily-loss still applies. With FCR_LIPS_BREAK and !partial_done, OnForcedClose
+         //  advances streak as if SL hit (Stage 1.1 behaviour, restored 2026-05-15).
          if(!g_state.partial_done)
             CStreakManager::OnForcedClose(g_state, fcr, Max_Streak_Length);
          CDailyLossManager::ApplyRealizedProfit(g_state, pre_close_profit, g_day_start_equity);

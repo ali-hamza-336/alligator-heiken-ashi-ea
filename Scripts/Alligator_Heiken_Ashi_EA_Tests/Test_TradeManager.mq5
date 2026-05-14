@@ -4,7 +4,9 @@
 //|  Phase 8: + Lips-break softening (ATR buffer / confirm bars /    |
 //|  min-hold bars). Defaults are the spec no-op.                    |
 //|  Path A Stage 2 Task C: Decide rewrite — MA_PARTIAL_AND_BE +     |
-//|  MA_TIGHTEN_SL_LIPS, trail-delay gate; TightenLipsPrice helper.  |
+//|  trail-delay gate; TightenLipsPrice helper.                      |
+//|  Approach C revert (2026-05-15): MA_TIGHTEN_SL_LIPS replaced by  |
+//|  MA_CLOSE_LIPS in Decide; TightenLipsPrice helper kept (dormant).|
 //+------------------------------------------------------------------+
 #property copyright "Path A Stage 2 test harness"
 #property version   "1.00"
@@ -182,12 +184,14 @@ void Test_TightenLipsPrice_ClampToEntry_Sell()
 }
 
 //==================================================================
-// Decide — composition. Stage 2 priority order (top-to-bottom):
+// Decide — composition. Post-revert priority order (top-to-bottom):
 //   1. NY-open carryover   → MA_CLOSE_NYOPEN
 //   2. Friday close        → MA_CLOSE_FRIDAY
 //   3. Zero-close guard    → MA_NONE (invariant #10)
-//   4. PartialAndBE (pre)  → MA_PARTIAL_AND_BE  (when !partial_done & at +trigger_R)
-//   5. TightenSLLips (pre) → MA_TIGHTEN_SL_LIPS (when !partial_done & Lips break)
+//   4. PartialAndBE (pre)  → MA_PARTIAL_AND_BE  (when !partial_done & at +trigger_R;
+//                                                 dormant at Trigger_R=3.0 default)
+//   5. Lips break (pre)    → MA_CLOSE_LIPS      (when !partial_done & Lips break;
+//                                                 Stage 1.1 restored 2026-05-15)
 //   6. Trail (post-BE)     → MA_TRAIL           (when partial_done & delay elapsed & improves)
 //   7. otherwise           → MA_NONE
 //==================================================================
@@ -249,33 +253,29 @@ void Test_Decide_FridayClose()
 void Test_Decide_LipsBreak_Buy()
 {
    Print("[Test_Decide_LipsBreak_Buy]");
-   //  Stage 2: BUY, !partial_done, close below lips, close < +1R → MA_TIGHTEN_SL_LIPS.
+   //  Post-revert: BUY, !partial_done, close below lips, close < +1R → MA_CLOSE_LIPS (market close).
    //  entry=1.1000 SL=1.0950 R=0.005; close=1.1040 (+0.8R, below +1R trigger).
-   //  lips=1.1050 ATR=0.001 buf=0.3 → TightenLipsPrice = 1.1050 - 0.0003 = 1.1047.
-   //  raw 1.1047 < entry 1.1000? No — 1.1047 > 1.1000 → clamp to entry 1.1000.
-   //  IsImprovement(true, 1.1000, 1.0950) → 1.1000>1.0950 → true. So d.new_sl=1.1000.
+   //  lips=1.1050 (close below → Lips break). Phase-8 softening defaults (buf=0, confirm=1) pass.
+   //  MA_CLOSE_LIPS doesn't modify SL; d.new_sl = 0.0 (sentinel: unused by close-at-market dispatch).
    ManageContext c = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close*/1.1040, /*lips*/1.1050, 0.001);
    const ManageDecision d = CTradeManager::Decide(c);
-   Assert(d.action == MA_TIGHTEN_SL_LIPS, "BUY close<lips, pre-BE -> MA_TIGHTEN_SL_LIPS");
-   AssertEqDbl(d.new_sl, 1.1000, 1e-9, "tighten SL clamped to entry (raw was above)");
+   Assert(d.action == MA_CLOSE_LIPS, "BUY close<lips, pre-BE -> MA_CLOSE_LIPS");
+   AssertEqDbl(d.new_sl, 0.0, 1e-9, "MA_CLOSE_LIPS leaves new_sl at sentinel 0.0");
 }
-void Test_Decide_TightenSL_Sell()
+void Test_Decide_CloseLips_Sell()
 {
-   Print("[Test_Decide_TightenSL_Sell]");
-   //  Stage 2 SELL mirror of Test_Decide_LipsBreak_Buy — closes the BUY/SELL symmetry gap in
-   //  Decide's integration of TightenLipsPrice + IsImprovement (Task C code-quality review).
+   Print("[Test_Decide_CloseLips_Sell]");
+   //  Post-revert SELL mirror of Test_Decide_LipsBreak_Buy — closes BUY/SELL symmetry gap.
    //  SELL entry=1.1000 SL=1.1050 (R=0.005, SL above entry). close=1.0960 (-0.4R below entry
    //  = +0.8R profit for SELL, below +1R trigger=1.0950 → no PartialAndBE).
    //  close 1.0960 > lips 1.0950 → SELL Lips break (price moved against SELL).
-   //  TightenLipsPrice(false, lips=1.0950, atr=0.001, buf=0.3, entry=1.1000):
-   //    raw = lips + 0.3*atr = 1.0953. raw 1.0953 < entry 1.1000 → clamp to entry 1.1000.
-   //  IsImprovement(false, 1.1000, 1.1050) → 1.1000 < 1.1050 → true. d.new_sl = 1.1000.
+   //  Post-revert: action is MA_CLOSE_LIPS (market close at current price), not SL tighten.
    ManageContext c = MakeCtx_BuyHealthy(1.1000, 1.1050, /*close*/1.0960, /*lips*/1.0950, 0.001);
    c.is_buy = false;
    c.entry_R_distance = MathAbs(1.1000 - 1.1050);   // re-snapshot for SELL-side R
    const ManageDecision d = CTradeManager::Decide(c);
-   Assert(d.action == MA_TIGHTEN_SL_LIPS, "SELL close>lips, pre-BE -> MA_TIGHTEN_SL_LIPS");
-   AssertEqDbl(d.new_sl, 1.1000, 1e-9, "SELL tighten SL clamped to entry (raw was below)");
+   Assert(d.action == MA_CLOSE_LIPS, "SELL close>lips, pre-BE -> MA_CLOSE_LIPS");
+   AssertEqDbl(d.new_sl, 0.0, 1e-9, "MA_CLOSE_LIPS leaves new_sl at sentinel 0.0");
 }
 void Test_Decide_TrailWhenBEDone()
 {
@@ -331,16 +331,16 @@ void Test_Decide_PartialAndBE_Sell()
 }
 
 //==================================================================
-// Decide — Phase 8 Lips-break softening (Stage 2: now gates MA_TIGHTEN_SL_LIPS)
+// Decide — Phase 8 Lips-break softening (post-revert: now gates MA_CLOSE_LIPS)
 //==================================================================
 void Test_Decide_LipsBreak_AtrBuffer()
 {
    Print("[Test_Decide_LipsBreak_AtrBuffer]");
    //  BUY, close 10 pip below lips, ATR=0.001. !partial_done.
-   //  buffer mult=0.1 → lb_buf=0.0001 → close still well past → MA_TIGHTEN_SL_LIPS.
+   //  buffer mult=0.1 → lb_buf=0.0001 → close still well past → MA_CLOSE_LIPS.
    ManageContext c1 = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close*/1.10400, /*lips*/1.10500, 0.001);
    c1.lips_break_atr_buffer = 0.1;
-   Assert(CTradeManager::Decide(c1).action == MA_TIGHTEN_SL_LIPS, "buf mult=0.1 (lb_buf=1pip) -> MA_TIGHTEN_SL_LIPS");
+   Assert(CTradeManager::Decide(c1).action == MA_CLOSE_LIPS, "buf mult=0.1 (lb_buf=1pip) -> MA_CLOSE_LIPS");
    //  buffer mult=1.5 → lb_buf=0.0015 > (lips-close=0.001) → not a break.
    //  close 1.104 < +1R trigger 1.105 → no PartialAndBE; → MA_NONE.
    ManageContext c2 = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close*/1.10400, /*lips*/1.10500, 0.001);
@@ -354,18 +354,18 @@ void Test_Decide_LipsBreak_ConfirmBars()
    ManageContext c1 = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close s1*/1.10400, /*lips s1*/1.10500, 0.001);
    c1.lips_break_confirm_bars = 2;
    c1.close_m15_s2 = 1.10550; c1.lips_m15_s2 = 1.10500;   // s2 above lips -> not beyond
-   Assert(CTradeManager::Decide(c1).action != MA_TIGHTEN_SL_LIPS, "confirm=2, s2 not beyond -> not MA_TIGHTEN_SL_LIPS");
-   //  confirm=2: both s1 and s2 beyond lips -> break -> MA_TIGHTEN_SL_LIPS.
+   Assert(CTradeManager::Decide(c1).action != MA_CLOSE_LIPS, "confirm=2, s2 not beyond -> not MA_CLOSE_LIPS");
+   //  confirm=2: both s1 and s2 beyond lips -> break -> MA_CLOSE_LIPS.
    ManageContext c2 = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close s1*/1.10400, /*lips s1*/1.10500, 0.001);
    c2.lips_break_confirm_bars = 2;
    c2.close_m15_s2 = 1.10450; c2.lips_m15_s2 = 1.10500;   // s2 below lips -> beyond
-   Assert(CTradeManager::Decide(c2).action == MA_TIGHTEN_SL_LIPS, "confirm=2, both bars beyond -> MA_TIGHTEN_SL_LIPS");
+   Assert(CTradeManager::Decide(c2).action == MA_CLOSE_LIPS, "confirm=2, both bars beyond -> MA_CLOSE_LIPS");
    //  confirm=3: s1 & s2 beyond but s3 not -> not a break.
    ManageContext c3 = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close s1*/1.10400, /*lips s1*/1.10500, 0.001);
    c3.lips_break_confirm_bars = 3;
    c3.close_m15_s2 = 1.10450; c3.lips_m15_s2 = 1.10500;
    c3.close_m15_s3 = 1.10600; c3.lips_m15_s3 = 1.10500;   // s3 above lips
-   Assert(CTradeManager::Decide(c3).action != MA_TIGHTEN_SL_LIPS, "confirm=3, s3 not beyond -> not MA_TIGHTEN_SL_LIPS");
+   Assert(CTradeManager::Decide(c3).action != MA_CLOSE_LIPS, "confirm=3, s3 not beyond -> not MA_CLOSE_LIPS");
 }
 void Test_Decide_LipsBreak_MinHold()
 {
@@ -374,10 +374,10 @@ void Test_Decide_LipsBreak_MinHold()
    ManageContext c1 = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close*/1.10400, /*lips*/1.10500, 0.001);
    c1.lips_break_min_hold_bars = 4; c1.bars_since_entry = 2;
    Assert(CTradeManager::Decide(c1).action == MA_NONE, "min_hold=4, bars=2 -> Lips exit suppressed -> MA_NONE");
-   //  bars_since_entry=5 -> hold elapsed -> MA_TIGHTEN_SL_LIPS.
+   //  bars_since_entry=5 -> hold elapsed -> MA_CLOSE_LIPS.
    ManageContext c2 = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close*/1.10400, /*lips*/1.10500, 0.001);
    c2.lips_break_min_hold_bars = 4; c2.bars_since_entry = 5;
-   Assert(CTradeManager::Decide(c2).action == MA_TIGHTEN_SL_LIPS, "min_hold=4, bars=5 -> MA_TIGHTEN_SL_LIPS");
+   Assert(CTradeManager::Decide(c2).action == MA_CLOSE_LIPS, "min_hold=4, bars=5 -> MA_CLOSE_LIPS");
    //  min_hold does NOT suppress higher-priority time exits (Friday).
    ManageContext c3 = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close*/1.10400, /*lips*/1.10500, 0.001);
    c3.lips_break_min_hold_bars = 999; c3.bars_since_entry = 0; c3.is_friday_close_time = true;
@@ -399,12 +399,12 @@ void Test_Decide_PartialAndBE_OnceOnly()
    const ManageDecision d = CTradeManager::Decide(c);
    Assert(d.action == MA_NONE, "partial_done=true & trail-delay not elapsed -> MA_NONE (no double partial)");
 }
-void Test_Decide_PartialAndBE_BeatsTightenLips()
+void Test_Decide_PartialAndBE_BeatsCloseLips()
 {
-   Print("[Test_Decide_PartialAndBE_BeatsTightenLips]");
+   Print("[Test_Decide_PartialAndBE_BeatsCloseLips]");
    //  BUY entry=1.10 R=0.005 (entry_R_distance). close=1.1051 → just above +1R trigger 1.1050.
    //  ALSO close (1.1051) < lips (1.1055) → Lips break fires too.
-   //  Priority: PartialAndBE wins over TightenSLLips.
+   //  Priority: PartialAndBE wins over MA_CLOSE_LIPS.
    ManageContext c = MakeCtx_BuyHealthy(1.1000, 1.0950, /*close*/1.10510, /*lips*/1.10550, 0.001);
    const ManageDecision d = CTradeManager::Decide(c);
    Assert(d.action == MA_PARTIAL_AND_BE, "+1R AND Lips break: PartialAndBE wins");
@@ -435,15 +435,15 @@ void Test_Decide_TrailDelay_Elapsed()
 void Test_Decide_NoLipsBreakPostBE()
 {
    Print("[Test_Decide_NoLipsBreakPostBE]");
-   //  partial_done=true (post-BE). Close BELOW lips for BUY. Pre-Stage-2 would fire MA_CLOSE_LIPS;
-   //  Stage 2: MA_TIGHTEN_SL_LIPS only fires pre-BE. Post-BE the trail covers it.
+   //  partial_done=true (post-BE). Close BELOW lips for BUY. Post-revert: MA_CLOSE_LIPS
+   //  is gated on !partial_done, so post-BE the trail covers it instead.
    //  Here trail target = 1.1050-0.0003 = 1.1047. current_sl=1.10020 → improves → MA_TRAIL.
    ManageContext c = MakeCtx_BuyHealthy(1.1000, 1.10020, /*close*/1.1040, /*lips*/1.1050, 0.001);
    c.partial_done       = true;
    c.bars_since_BE_move = 99;
    const ManageDecision d = CTradeManager::Decide(c);
-   Assert(d.action == MA_TRAIL, "post-BE, close<lips -> MA_TRAIL (not MA_TIGHTEN_SL_LIPS)");
-   Assert(d.action != MA_TIGHTEN_SL_LIPS, "post-BE never returns MA_TIGHTEN_SL_LIPS");
+   Assert(d.action == MA_TRAIL, "post-BE, close<lips -> MA_TRAIL (not MA_CLOSE_LIPS)");
+   Assert(d.action != MA_CLOSE_LIPS, "post-BE never returns MA_CLOSE_LIPS");
 }
 //==================================================================
 // Decide — zero-close sentinel guard (cross-symbol bar events)
@@ -552,7 +552,7 @@ void OnStart()
    Test_Decide_NYOpenCarryover_WinsAll();
    Test_Decide_FridayClose();
    Test_Decide_LipsBreak_Buy();
-   Test_Decide_TightenSL_Sell();
+   Test_Decide_CloseLips_Sell();
    Test_Decide_TrailWhenBEDone();
    Test_Decide_TrailNoImprovement();
    Test_Decide_PartialAndBE_Buy();
@@ -562,7 +562,7 @@ void OnStart()
    Test_Decide_LipsBreak_ConfirmBars();
    Test_Decide_LipsBreak_MinHold();
    Test_Decide_PartialAndBE_OnceOnly();
-   Test_Decide_PartialAndBE_BeatsTightenLips();
+   Test_Decide_PartialAndBE_BeatsCloseLips();
    Test_Decide_TrailDelay_Suppressed();
    Test_Decide_TrailDelay_Elapsed();
    Test_Decide_NoLipsBreakPostBE();

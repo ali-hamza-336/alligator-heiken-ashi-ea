@@ -77,6 +77,15 @@ void Test_Forced_FridayCloseDoesNotAdvance()
    AssertEqInt(s.last_sl_count, 0, "Friday close: streak untouched");
    AssertEqInt(s.streak_position, 1, "streak_position untouched");
 }
+void Test_Forced_LipsBreakAdvancesStreak()
+{
+   Print("[Test_Forced_LipsBreakAdvancesStreak]");
+   //  Stage 1.1 restored (2026-05-15): Lips-break forced close advances streak as if SL hit.
+   EAState s = MakeFresh();
+   CStreakManager::OnForcedClose(s, FCR_LIPS_BREAK, 3);
+   AssertEqInt(s.last_sl_count, 1, "Lips-break: last_sl_count = 1");
+   AssertEqInt(s.streak_position, 2, "Lips-break: streak_position advances to 2");
+}
 void Test_Forced_NYCarryoverDoesNotAdvance()
 {
    Print("[Test_Forced_NYCarryoverDoesNotAdvance]");
@@ -140,6 +149,7 @@ void OnStart()
    Test_Mode_AfterTPIsLocked();
    Test_Mode_After3SLsIsLocked();
    Test_Forced_FridayCloseDoesNotAdvance();
+   Test_Forced_LipsBreakAdvancesStreak();
    Test_Forced_NYCarryoverDoesNotAdvance();
    Test_Reset_ZerosCounters();
    Test_WalkThrough_CleanWin();

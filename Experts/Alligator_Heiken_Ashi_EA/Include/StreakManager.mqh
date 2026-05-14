@@ -19,6 +19,7 @@ enum ETradingMode
 
 enum EForcedCloseReason
   {
+   FCR_LIPS_BREAK   = 0,   // Restored 2026-05-15: Lips-break market close advances streak as if an SL hit
    FCR_FRIDAY_CLOSE = 1,
    FCR_NY_CARRYOVER = 2,
   };
@@ -98,11 +99,11 @@ void CStreakManager::OnTPClose(EAState &state)
 void CStreakManager::OnForcedClose(EAState &state, const EForcedCloseReason r,
                                    const int max_streak)
   {
-   //  Stage 2: FCR_FRIDAY_CLOSE / FCR_NY_CARRYOVER are no-op for streak.
-   //  (Friday-15:00 NY rollover wipes streak next NY-open; NY carryover close
-   //  came from a previous cycle and shouldn't count.) FCR_LIPS_BREAK is gone
-   //  — pre-BE Lips break is now MA_TIGHTEN_SL_LIPS (SL tighten, no close).
-   //  Function kept to give Friday/NY-open dispatch a single hook to call.
+   //  FCR_LIPS_BREAK: streak semantics = SL (Stage 1.1 behavior, restored 2026-05-15).
+   //  FCR_FRIDAY_CLOSE / FCR_NY_CARRYOVER: no-op for streak.
+   //  (Friday-15:00 NY rollover wipes streak next NY-open; NY carryover close came
+   //  from a previous cycle and shouldn't count.)
+   if(r == FCR_LIPS_BREAK) OnSLClose(state, max_streak);
   }
 
 //+------------------------------------------------------------------+

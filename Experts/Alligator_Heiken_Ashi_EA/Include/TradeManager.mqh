@@ -27,10 +27,11 @@ enum EManageAction
   {
    MA_NONE              = 0,
    MA_TRAIL             = 2,
+   MA_CLOSE_LIPS        = 3,   // Stage 1.1 (restored post-Stage-2 audit): market close on confirmed Lips break
    MA_CLOSE_FRIDAY      = 4,
    MA_CLOSE_NYOPEN      = 5,
-   MA_PARTIAL_AND_BE    = 6,   // Stage 2: at +trigger_R, partial-close + move SL to BE+buffer
-   MA_TIGHTEN_SL_LIPS   = 7,   // Stage 2: pre-BE Lips break, tighten SL to Lips ± buf×ATR (clamped to entry)
+   MA_PARTIAL_AND_BE    = 6,   // Stage 2: at +trigger_R, partial-close + move SL to BE+buffer (dormant at Trigger_R=3.0 default)
+   MA_TIGHTEN_SL_LIPS   = 7,   // Stage 2: pre-BE Lips break, tighten SL (DEAD CODE — Decide no longer returns this; revert audit 2026-05-15)
   };
 
 struct ManageDecision
@@ -181,15 +182,22 @@ bool CTradeManager::IsBeyondLips(const bool is_buy, const double close_price,
   }
 
 //+------------------------------------------------------------------+
-//| Decide — single pass over the bar context. Stage 2 priority:     |
+//| Decide — single pass over the bar context. Priority (post-revert):|
 //|   1. NY-open carryover     (spec §5.5 — wins over everything)    |
 //|   2. Friday close          (spec §5.7)                           |
 //|   3. Zero-close guard      (invariant #10)                       |
-//|   4. MA_PARTIAL_AND_BE     (Stage 2: at +trigger_R, !partial_done)|
-//|   5. MA_TIGHTEN_SL_LIPS    (Stage 2: Lips break, !partial_done,  |
-//|                              Phase-8 softening still gates it)   |
-//|   6. MA_TRAIL              (post-BE; gated by Trail_Delay_Bars)  |
+//|   4. MA_PARTIAL_AND_BE     (Stage 2: at +trigger_R, !partial_done;|
+//|                              dormant at Trigger_R=3.0 default)   |
+//|   5. MA_CLOSE_LIPS         (Stage 1.1 restored: Lips break,      |
+//|                              !partial_done, Phase-8 softening    |
+//|                              gates; market close at current px)  |
+//|   6. MA_TRAIL              (post-BE; gated by Trail_Delay_Bars;  |
+//|                              dormant when partial doesn't fire)  |
 //|   7. otherwise             MA_NONE                               |
+//|                                                                  |
+//| Revert audit (2026-05-15): MA_TIGHTEN_SL_LIPS (Stage 2's        |
+//| Approach C) replaced with MA_CLOSE_LIPS after Task E backtests   |
+//| showed tighten-SL is −$4.2k worse than market-close on this data.|
 //|                                                                  |
 //| Stage 2 BE-done detection uses ctx.partial_done (explicit flag), |
 //| not current_sl >= entry. After partial fires, current_sl ≈ entry,|
@@ -237,8 +245,13 @@ ManageDecision CTradeManager::Decide(const ManageContext &ctx)
         }
      }
 
-   //--- Stage 2 step 5: MA_TIGHTEN_SL_LIPS — only pre-partial (post-BE trail covers).
-   //--- Phase-8 softening (min-hold, ATR buffer, N-bar confirm) gates it.
+   //--- Lips-break market close (Stage 1.1 behavior restored 2026-05-15 after Task E audit).
+   //--- Phase-8 softening params still gate this — only the *action* changed back from
+   //--- MA_TIGHTEN_SL_LIPS (Approach C, proven net-negative) to MA_CLOSE_LIPS (market close at
+   //--- current price, locks realized P/L, frees the global single-trade slot).
+   //--- Backtest evidence: Lips-tighten = −$1.7k; do-nothing = +$430; market-close = +$2.5k on the
+   //--- 12-mo 6-symbol sample. See CLAUDE.md project status.
+   //--- Only pre-partial (post-BE trail covers). Same softening order as before.
    if(!ctx.partial_done && ctx.bars_since_entry >= ctx.lips_break_min_hold_bars)
      {
       const double lb_buf = ctx.lips_break_atr_buffer * ctx.atr_m15_s1;
@@ -249,18 +262,12 @@ ManageDecision CTradeManager::Decide(const ManageContext &ctx)
          broken = IsBeyondLips(ctx.is_buy, ctx.close_m15_s3, ctx.lips_m15_s3, lb_buf);
       if(broken)
         {
-         const double tighten = TightenLipsPrice(ctx.is_buy, ctx.lips_m15_s1, ctx.atr_m15_s1,
-                                                 ctx.trail_atr_buffer, ctx.entry);
-         if(IsImprovement(ctx.is_buy, tighten, ctx.current_sl))
-           {
-            d.action = MA_TIGHTEN_SL_LIPS;
-            d.new_sl = tighten;
-            d.reason = StringFormat("tighten SL on Lips break: close=%.5f %s lips=%.5f (buf=%.5f confirm=%d) -> SL %.5f",
-                                    ctx.close_m15_s1, ctx.is_buy ? "<" : ">", ctx.lips_m15_s1,
-                                    lb_buf, ctx.lips_break_confirm_bars, tighten);
-            return d;
-           }
-         //--- broken but not an improvement -> fall through to trail / none
+         d.action = MA_CLOSE_LIPS;
+         d.new_sl = 0.0;   // not used by the close-at-market dispatch path
+         d.reason = StringFormat("Lips break -> market close: close=%.5f %s lips=%.5f (buf=%.5f confirm=%d)",
+                                 ctx.close_m15_s1, ctx.is_buy ? "<" : ">", ctx.lips_m15_s1,
+                                 lb_buf, ctx.lips_break_confirm_bars);
+         return d;
         }
      }
 
