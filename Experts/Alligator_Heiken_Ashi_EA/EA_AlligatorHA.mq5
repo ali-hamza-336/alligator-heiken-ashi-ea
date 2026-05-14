@@ -467,6 +467,11 @@ void OnNewM15Bar(const string sym, const datetime bar_time)
    if(StringLen(g_state.current_cycle_id) == 0)
       g_state.current_cycle_id = g_state.open_trade_cycle_id;
    g_state.trades_taken_today += 1;
+   //--- Stage 2: snapshot original R for the +trigger_R compute. Belt-and-braces
+   //--- reset the per-trade flags in case a prior close took an unusual path.
+   g_state.entry_R_distance    = MathAbs(plan.entry - plan.sl);
+   g_state.partial_done        = false;
+   g_state.be_move_time        = 0;
    g_state.last_save_time      = TimeGMT();
    if(!State.Save(g_state, g_state_file))
       Log.Error("    state save after fill FAILED", sym);
@@ -528,6 +533,32 @@ void AdoptOpenPosition()
    //--- exactly one live position
    const ulong  t   = live_tickets[0];
    const string sym = live_syms[0];
+
+   //--- Stage 2: best-effort restore of entry_R_distance / partial_done / be_move_time
+   //--- if state lacks them (legacy file or post-crash recovery). Underestimates the
+   //--- original R if SL has been modified mid-trade (BE/tighten/trail) — acceptable
+   //--- for a recovery path. Reads via PositionSelectByTicket to access POSITION_*.
+   if(PositionSelectByTicket(t))
+     {
+      const double entry_p  = PositionGetDouble(POSITION_PRICE_OPEN);
+      const double sl_now   = PositionGetDouble(POSITION_SL);
+      const bool   is_buy   = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+      if(g_state.entry_R_distance <= 0 && entry_p > 0 && sl_now > 0)
+         g_state.entry_R_distance = MathAbs(entry_p - sl_now);
+      if(!g_state.partial_done && sl_now > 0 && entry_p > 0)
+        {
+         //  SL already past entry => assume BE move already happened upstream.
+         //  Conservative: set be_move_time to now so trail-delay starts fresh.
+         const bool sl_past_entry = is_buy ? (sl_now >= entry_p) : (sl_now <= entry_p);
+         if(sl_past_entry)
+           {
+            g_state.partial_done = true;
+            g_state.be_move_time = TimeCurrent();
+            Log.Info(StringFormat("Adopt: BE-already-moved heuristic -> partial_done=true be_move_time=now (entry=%.5f sl=%.5f)", entry_p, sl_now));
+           }
+        }
+     }
+
    if(g_state.open_trade_ticket == t)
      {
       Log.Info(StringFormat("Adopt: state matches live ticket=%I64u (%s) cycle=%s",
@@ -632,6 +663,9 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
       ResolveClosedPosition(g_state.open_trade_ticket);   // Task 6 fills body
       g_state.open_trade_ticket   = 0;
       g_state.open_trade_cycle_id = "";
+      g_state.partial_done        = false;   // Stage 2: clear per-trade flags
+      g_state.be_move_time        = 0;
+      g_state.entry_R_distance    = 0.0;
       g_state.last_save_time      = TimeGMT();
       State.Save(g_state, g_state_file);
       return true;
