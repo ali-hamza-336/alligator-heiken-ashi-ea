@@ -162,7 +162,64 @@ Bundle test + impl per task (the `feedback_no_red_handoff_for_mechanical_fails` 
 
 ## Result (post-Task-E)
 
-**TBD** — Task E (re-baseline backtest) hasn't run yet. Fill this in after Task D ships and the backtest completes.
+**VERDICT (2026-05-15): Stage 2 is a regression. Revert Approach C; keep the rest of the Stage-2 infrastructure dormant.** Full audit below.
+
+### The 3-way Task E comparison
+
+12-month Strategy Tester, 6-symbol, $100k, 1:33 leverage, every-tick-real-ticks, 2025-05-12 → 2026-05-11. Same backtest config across all rows. Each row is a complete run with a different Lips-break behaviour, everything else equal.
+
+| Lips-break behavior | Net P/L | PF | WR | Trades | Max DD | Avg hold |
+|---|---|---|---|---|---|---|
+| **Market close** (Stage 1.1) | **+$2,474** | 1.046 | 45.7% | 372 | 5.65% | 1h 30min |
+| **Do nothing** (files 13/14: `LipsBreak_Min_Hold_Bars=99999`) | **+$430** | 1.009 | 54.4% | 294 | **5.56%** | 4h 28min |
+| **Tighten SL** (files 9–12: Approach C, no partial firing) | **−$1,739** | 0.966 | 45.1% | 346 | 6.85% | 2h 19min |
+| Tighten + partial Frac=0.5 (file 7) | −$4,203 | 0.916 | 50.1% | 373 | 6.85% | 2h 22min |
+| Tighten + partial Frac=1.0 (file 8) | −$4,346 | 0.912 | 46.2% | 342 | 6.85% | 2h 22min |
+
+Reports are in `Experts/Alligator_Heiken_Ashi_EA/Reports/`:
+- File 7: Frac=0.5, Trigger_R=1.0, Lips-tighten on.
+- File 8: Frac=1.0, Trigger_R=1.0, Lips-tighten on.
+- Files 9–12: Trigger_R=2.0 or 3.0 (partial never fires — all four files are byte-identical, proving the partial never actually reaches +2R), Lips-tighten on.
+- Files 13/14: `LipsBreak_Min_Hold_Bars=99999` (Lips-tighten disabled), Trigger_R=2/3 (partial dormant). Pure structural SL + fixed TP only.
+
+### What the audit proves
+
+The 3-way isolation cleanly separates the cost of each piece:
+
+1. **Lips-break market close adds ~$2,044 vs do-nothing** (Stage 1.1 +$2,474 − do-nothing +$430). Booking realized P/L on Lips break + freeing the single-trade slot is genuinely helpful.
+2. **Approach C (Lips-tighten) costs ~$2,169 vs do-nothing** (do-nothing +$430 − Approach C −$1,739). Tightening SL on Lips break is worse than doing nothing at all.
+3. **Approach C costs ~$4,213 vs market close** (Stage 1.1 +$2,474 − Approach C −$1,739). The full Stage-2 mistake.
+4. **Partial-at-+1R adds ~$2.5k of additional drag on top of Approach C** (file 7 −$4,203 vs files 9–12 −$1,739 at Trigger_R=2+). But partial only fires at Trigger_R=1.0 — at Trigger_R=2.0+, it's dormant because no trade reaches +2R from entry before exiting via SL or Lips-break management. So the partial's damage is conditional on Trigger_R=1.0.
+
+### Why Approach C is worse than market-close (counter-intuitive but evidenced)
+
+The Stage 2 brainstorm hypothesized: "letting a trade survive a Lips poke could recover into a winner." The data says the opposite:
+
+- **Stage 1.1's market close** at Lips break captures the trade at *current price*. If the trade was at +$200 (in profit but not at TP yet), it books +$200. Trade ends, global single-trade slot frees up, next signal can enter.
+- **Approach C's SL-tighten** at Lips break leaves the trade open with SL pulled close to the Lips line. M15 EURUSD wiggles by 20–50 pips routinely → the tightened SL gets hit a few bars later for ~$0 to small loss. The trade has been blocking new entries for hours in the meantime.
+
+The opportunity cost is the killer. Avg hold time in the Approach C runs is 2h 19min vs Stage 1.1's 1h 30min — trades stay open ~50% longer for ~$0 incremental P/L. Trade count drops 372 → 346 → 294 as you progressively block more entries. Trades that would have happened in Stage 1.1 simply don't happen because the slot is occupied by a trade Approach C is "saving" (but actually just slow-bleeding to its tightened SL).
+
+### Why the no-TP runner architecture didn't work
+
+Files 9–12 give the cleanest evidence: at `Partial_Close_Trigger_R=2.0` or `3.0`, the partial-and-BE branch never fires for any trade. Not once. In 346 trades over 12 months, no trade reached +2R from entry. They all exited earlier via initial SL, Approach C SL-tighten, or forced close.
+
+Two contributing factors:
+
+1. **Structural SL is tight.** `Min_SL_ATR_Mult=0.3` typically produces SL distances of 0.5–1.0 R worth (the structural Jaw ± 0.2×ATR is often closer than 1R from entry on M15). A 2R move from entry is 4–6× the SL distance. Trades stop out or get managed out long before that.
+2. **Approach C kills winners early.** Pre-BE, ANY confirmed Lips break tightens SL to Lips. On M15 EURUSD a Lips poke is common — happens within every normal price oscillation. Trades can't accumulate to +2R because Approach C cuts them short.
+
+The architecture's "no-TP runner that catches big trends" assumed M15 EURUSD trends extend 2R+ persistently. They don't on this signal generator. Fixed 2R TP (Stage 1.1) captured the structural edge by harvesting the +1R–+2R band before it could retrace.
+
+### Other audit observations from files 13/14 (the do-nothing run)
+
+- **Win rate jumped to 54.4%** — the highest of any tested config. Without Approach C cutting winners short, more trades reach the fixed 2R TP.
+- **Avg loss got bigger** ($365 vs $268 in other runs). Losing trades run to full structural SL. Per-loss variance up.
+- **Max consecutive losses dropped to 6** (was 11 in every other config). Each loss is bigger but cluster less. Cleaner equity curve.
+- **Max DD: 5.56% — the lowest of any config**. Best risk profile, even better than Stage 1.1's 5.65%.
+- **Trade count dropped 372 → 294.** Longer holds = slot blocked longer = fewer entries. The signal-blocking cost is real.
+
+Net: the do-nothing config is **profitable but weaker than Stage 1.1**. The signal generator + structural SL/TP alone is +EV; Stage 1.1's market-close adds ~$2k on top by closing trades into freed-slot opportunities.
 
 ### Stage 1.1 baseline (pre-Stage-2, for comparison)
 
@@ -170,22 +227,14 @@ Bundle test + impl per task (the `feedback_no_red_handoff_for_mechanical_fails` 
 - PF 1.046, max DD 5.65% equity, 372 trades, 45.7% WR
 - Per-symbol: XAUUSD +$1,528 (139t, 56%WR), USDCHF +$1,443 (32t), NZDUSD +$1,286 (23t), EURUSD +$491 (27t), USDJPY −$700 (82t), GBPUSD −$1,574 (69t)
 - Entry mix: 72.3% Type A (269 trades), 27.7% Type B (103 trades)
-- Exit modes: 21.2% SL, 36.3% TP, **42.5% BLANK** (MA_CLOSE_LIPS = the bleed Stage 2 targets)
-- Per-type expectancy: Type A $6.08/trade, Type B $8.17/trade. Type B 52.4% WR; Type A 42.4% WR.
+- Exit modes: 21.2% SL, 36.3% TP, **42.5% MA_CLOSE_LIPS** (the mechanism Stage 2 wrongly replaced)
 - Worst streak: 11 losses for −$3,499 over 10 days (May-30 → Jun-9 2025). USDJPY ate 5 of 11.
-- Avg hold time 1h 30min, 96.8% same-day exits, total swap −$3.73 (essentially zero — Type-A intraday mix collapsed the multi-day swap drag from ~$1k/yr).
+- Avg hold time 1h 30min, 96.8% same-day exits, total swap −$3.73.
 
-The exit-mode distribution is the smoking gun for Stage 2: 158 of 372 trades (42.5%) closed via the old `MA_CLOSE_LIPS` market-close. Stage 2's Approach C converts those to SL-tighten + `IsImprovement` fall-through (some trades will then exit on the original SL, runner profile, or forced-close). If Stage 2 cuts the small-loss cluster without giving up too much winner-side, PF should lift from 1.046 toward 1.5+.
+42.5% of Stage 1.1's exits went through `MA_CLOSE_LIPS`. The Stage 2 brainstorm mis-identified those as "bleed" — they were actually the strategy's profit-locking mechanism harvesting +0.5R–+2R wins before retracements.
 
-### Expected Task E outputs
+### Recommendation
 
-After Task D ships, run two passes in the Strategy Tester (EURUSD chart, M15, every-tick-real-ticks, $100k, 1:33, 2025-05-12 → 2026-05-11, `Verbose_Logging=false`):
+Revert Approach C. Restore `MA_CLOSE_LIPS` market-close as the action for confirmed Lips breaks. Keep the partial-and-BE infrastructure in code but make it dormant by default (defaults that prevent it from firing on this signal generator). See [docs/2026-05-15-stage2-revert.md](2026-05-15-stage2-revert.md) for the per-task revert plan.
 
-1. **`Partial_Close_Fraction=0.5`** (default) — bank half at +1R, runner trails. Compare to baseline +2.47%.
-2. **`Partial_Close_Fraction=1.0`** (sanity) — close full at +1R = 1:1 RR baseline. Tells us if the runner adds value at all.
-
-Per pass, document: final balance, PF, max DD, win rate, trade count, total swap, per-symbol P/L, exit-mode distribution (SL / TP / FORCED), Type-A vs Type-B breakdown, worst losing streak.
-
-Then run **walk-forward**: 8mo train (2025-05-12 → 2026-01-11) vs 4mo test (2026-01-12 → 2026-05-11). Catches over-fitting on the headline year.
-
-Goal bar: cross PF > 1.5 OR at least preserve +2.47% with a materially better profile (higher avg-win, smaller max-DD-cluster). If Stage 2 is flat or worse than +2.47%, Stage 3 (entry tightening) is the next lever — but think hard about whether to keep tuning vs stop.
+After revert: re-baseline at +$2,474 (i.e., reproduce Stage 1.1's number with all Stage-2 infrastructure dormant), then walk-forward (8mo train / 4mo test) to confirm the +$2,474 isn't an over-fit artifact of the 12-mo headline window.
