@@ -72,8 +72,9 @@ d399cdc  Path A Stage 2 Task D step 3: snapshot entry_R_distance at fill, best-e
 f7624e6  Path A Stage 2 Task D step 7b: post-review polish
 afa9fa0  Path A Stage 2 Task D: status update + per-task plan doc
 643de78  EA inputs: strip inline comments so MT5 panel shows variable names
+30d3a78  Path A Stage 2 Task E audit + Approach C revert plan
 ```
-Plus this session's doc commit (CLAUDE.md status update with Task E audit + filled-in Stage 2 design doc Result section + new revert plan doc) once you commit + push together. **Note:** there's an UNSTAGED partial revert in `Include/TradeManager.mqh` from the prior stuck session — see ⚠ warning in "Where we are" above. It is NOT staged for the doc commit and must be handled separately at the start of the next session.
+**19 commits ahead of `origin/main` (`eb77897`).** Push at the start of the next session. **Note:** 3 unstaged code files from the prior stuck session are still in the tree — see ⚠ warning in "Where we are" above. They are NOT in any commit and must be handled separately at the start of the next session (review via `git diff`, then either keep + complete tests, or `git checkout` and start fresh).
 
 **Pending, in order:**
 
@@ -90,7 +91,7 @@ Plus this session's doc commit (CLAUDE.md status update with Task E audit + fill
 - News filter is auto-disabled in the Strategy Tester (`MQLInfoInteger(MQL_TESTER)`); `News_Filter_Enabled` only matters live.
 - Backtest setup that's been used: Strategy Tester, EURUSD chart, M15, "Every tick based on real ticks", $100k, leverage 1:33, date 2025-05-12→2026-05-11, `Verbose_Logging=false` for long runs.
 - Spec is advisory for parameters/strategy details (Path A); `EA_Action_Plan.md` §1–§8/§12 (architecture, FTMO compliance, state schema, edge cases) still hold. Don't re-litigate the skeleton.
-- Repo: git-rooted at `MQL5/`, pushed to `https://github.com/ali-hamza-336/alligator-heiken-ashi-ea`. **Origin/main currently at `eb77897`.** Push the 6 listed local commits + this session's doc commit at the start of next session.
+- Repo: git-rooted at `MQL5/`, pushed to `https://github.com/ali-hamza-336/alligator-heiken-ashi-ea`. **Origin/main currently at `eb77897`; 19 commits ahead locally (listed above).** Push at the start of the next session.
 - **xlsx parsing trick** (used this session to read Strategy Tester reports without copy-paste): unzip the `.xlsx` via PowerShell `[System.IO.Compression.ZipFile]::ExtractToDirectory`, parse `xl/sharedStrings.xml` for the string pool, then `xl/worksheets/sheet1.xml` for the row/cell data. Headlines (final balance, PF, DD, win rate, trade count) are in rows ~70-95; the order list starts at row ~115; deals (with running P/L) start mid-file. Reports live in `MQL5/Experts/Alligator_Heiken_Ashi_EA/Reports/`. No need to ask user for journal — the xlsx alone has the full trade list, sufficient to compute per-symbol P/L + exit-mode distribution + Type-A/B mix + intraday-vs-overnight + worst losing streak.
 
 **Mostly-resolved carry-overs** (the 2026-05-12+ backtests + the +2.47% Stage 1.1 run exercised these — all behaved): Lips-break / Friday-close forced exits fire; `Resolve: SL/TP` streak + daily-loss accounting works; cycle rollover (NY 08:00) + daily-loss reset (00:00 CET) fire; `Adopt:` reconcile works; the global single-trade rule held across 372 sequential trades; no `ModifySL failed` spam (Bug-B is clean). Still genuinely open: `MaybeRolloverCycle`/`MaybeResetDailyLoss` are skipped on bars while a position is open (early-return in `OnNewM15Bar`) — harmless (rollover is a no-op while a trade is live; daily-reset lag is ~15 min at a boundary); if Task D touches `OnNewM15Bar` dispatch it could hoist them.
@@ -106,7 +107,7 @@ Experts/Alligator_Heiken_Ashi_EA/
 ├── docs/
 │   ├── 2026-05-12-lips-break-exit-softening.md   # design doc: the 3 LipsBreak_* knobs              [Phase 8]
 │   ├── 2026-05-12-path-a-stage1.md               # design doc: Stage-1 cheap fixes (spread/SL-floor/cull) [Path A]
-│   ├── 2026-05-13-path-a-stage2.md               # design doc: Stage-2 exit rework (Approach C + partial-TP + trail delay) [Path A — Tasks A/B/C shipped]
+│   ├── 2026-05-13-path-a-stage2.md               # design doc: Stage-2 exit rework — Tasks A/B/C/D shipped + Task E audit filled (regression, revert queued) [Path A]
 │   ├── 2026-05-13-path-a-roadmap.md              # roadmap sketch: Stages 3-5 (entries, macro, swap) [Path A]
 │   ├── 2026-05-14-stage2-task-d-handoff.md       # Task D design decisions + atomicity recipe + acceptance checklist [Path A — historical]
 │   ├── 2026-05-14-stage2-task-d-plan.md          # Task D per-task implementation plan (8 TDD tasks) [Path A — Task D shipped via this plan]
