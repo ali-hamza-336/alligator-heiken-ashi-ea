@@ -779,39 +779,129 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
                           SymbolInfoDouble(pos_sym, SYMBOL_POINT),
                           CMarketFilters::PipSize(pos_sym));
 
+   const double current_pos_lot = PositionGetDouble(POSITION_VOLUME);
+   const double vol_min  = SymbolInfoDouble(pos_sym, SYMBOL_VOLUME_MIN);
+   const double vol_step = SymbolInfoDouble(pos_sym, SYMBOL_VOLUME_STEP);
+
    bool action_ok = false;
-   if(d.action == MA_MOVE_BE || d.action == MA_TRAIL)
+
+   if(d.action == MA_TRAIL || d.action == MA_TIGHTEN_SL_LIPS)
      {
+      //  Pure SL-modify actions. ModifySL preserves the current TP (which is 0 post-partial).
       Log.Info(StringFormat("MANAGE %s ticket=%I64u %s -> SL %.5f (%s)",
                              pos_sym, g_state.open_trade_ticket,
-                             d.action == MA_MOVE_BE ? "BE" : "TRAIL",
+                             d.action == MA_TRAIL ? "TRAIL" : "TIGHTEN_SL_LIPS",
                              d.new_sl, d.reason), pos_sym);
       action_ok = CTradeManager::ModifySL(g_state.open_trade_ticket, d.new_sl, tp);
       if(!action_ok)
          Log.Error(StringFormat("MANAGE ModifySL failed ticket=%I64u", g_state.open_trade_ticket), pos_sym);
      }
-   else
+   else if(d.action == MA_PARTIAL_AND_BE)
      {
-      const string label =
-         (d.action == MA_CLOSE_LIPS  ) ? "CLOSE_LIPS"   :
-         (d.action == MA_CLOSE_FRIDAY) ? "CLOSE_FRIDAY" : "CLOSE_NYOPEN";
+      //  Three sub-cases by PartialLot result. See CLAUDE.md invariant #18.
+      const double partial_lot = CPositionManager::PartialLot(
+         current_pos_lot, Partial_Close_Fraction, vol_min, vol_step);
+
+      if(partial_lot <= 0.0)
+        {
+         //--- Fraction=0.0: skip partial close, just ModifySL to BE+buffer (clear TP).
+         Log.Info(StringFormat("MANAGE %s ticket=%I64u PARTIAL_AND_BE (Fraction=0, BE-only) -> SL %.5f (%s)",
+                                pos_sym, g_state.open_trade_ticket, d.new_sl, d.reason), pos_sym);
+         action_ok = CTradeManager::ModifySL(g_state.open_trade_ticket, d.new_sl, 0.0);
+         if(action_ok)
+           {
+            g_state.partial_done = true;
+            g_state.be_move_time = bar_time;
+           }
+        }
+      else if(partial_lot >= current_pos_lot - 1e-9)
+        {
+         //--- Close-full path (Fraction=1.0 or close-full fallback when runner < vol_min).
+         //--- Treat as a finished TP win: streak hook + apply profit + clear per-trade state.
+         const double pre_close_profit = PositionGetDouble(POSITION_PROFIT);
+         Log.Info(StringFormat("MANAGE %s ticket=%I64u PARTIAL_AND_BE (close-full at +%.1fR, P/L=%.2f)",
+                                pos_sym, g_state.open_trade_ticket,
+                                Partial_Close_Trigger_R, pre_close_profit), pos_sym);
+         action_ok = CTradeManager::CloseAtMarket(g_state.open_trade_ticket, slip);
+         if(action_ok)
+           {
+            CStreakManager::OnTPClose(g_state);
+            CDailyLossManager::ApplyRealizedProfit(g_state, pre_close_profit, g_day_start_equity);
+            g_state.open_trade_ticket   = 0;
+            g_state.open_trade_cycle_id = "";
+            g_state.partial_done        = false;
+            g_state.be_move_time        = 0;
+            g_state.entry_R_distance    = 0.0;
+            Log.Info(StringFormat("    partial-as-full-close: streak/cycle updated, daily_loss_pct=%.4f%%",
+                                   g_state.daily_loss_pct));
+           }
+         else
+            Log.Error(StringFormat("MANAGE CloseAtMarket failed ticket=%I64u", g_state.open_trade_ticket), pos_sym);
+        }
+      else
+        {
+         //--- Normal split. Atomic sequence: partial-close -> ModifySL -> flags -> save.
+         //--- Scale POSITION_PROFIT (still on full lot at this point) to the partial portion.
+         const double full_pos_profit  = PositionGetDouble(POSITION_PROFIT);
+         const double partial_profit   = full_pos_profit * (partial_lot / current_pos_lot);
+         Log.Info(StringFormat("MANAGE %s ticket=%I64u PARTIAL_AND_BE close=%.2f/%.2f at +%.1fR -> SL %.5f (P/L on partial=%.2f) [%s]",
+                                pos_sym, g_state.open_trade_ticket,
+                                partial_lot, current_pos_lot, Partial_Close_Trigger_R,
+                                d.new_sl, partial_profit, d.reason), pos_sym);
+
+         //--- Step 1: partial-close via CTrade::PositionClosePartial.
+         CTrade trade;
+         trade.SetExpertMagicNumber(Magic_Number);
+         trade.SetDeviationInPoints(slip);
+         const bool partial_ok = trade.PositionClosePartial(g_state.open_trade_ticket, partial_lot);
+         if(!partial_ok)
+           {
+            Log.Error(StringFormat("    PartialClose FAILED retcode=%u %s",
+                                    trade.ResultRetcode(), trade.ResultComment()), pos_sym);
+            action_ok = false;
+           }
+         else
+           {
+            //--- Step 2: ModifySL to BE+buffer, clear TP (runner has no TP).
+            const bool modify_ok = CTradeManager::ModifySL(g_state.open_trade_ticket, d.new_sl, 0.0);
+            //--- Step 3: book the partial as a TP win + apply realized profit.
+            //--- Done unconditionally (the partial actually happened, the broker booked it).
+            CStreakManager::OnTPClose(g_state);
+            CDailyLossManager::ApplyRealizedProfit(g_state, partial_profit, g_day_start_equity);
+            g_state.partial_done = true;          // bias: prevent double-partial on next bar
+            g_state.be_move_time = bar_time;
+            action_ok = true;
+            if(modify_ok)
+               Log.Info(StringFormat("    partial OK: streak +TP, daily_loss_pct=%.4f%%, runner=%.2f lots @ SL %.5f",
+                                      g_state.daily_loss_pct,
+                                      current_pos_lot - partial_lot, d.new_sl));
+            else
+               Log.Error(StringFormat("    HALF-STATE: partial fired (lot %.2f closed) but ModifySL FAILED for ticket=%I64u — runner has no BE protection. partial_done=true set to avoid double-partial; please manually inspect.",
+                                       partial_lot, g_state.open_trade_ticket), pos_sym);
+           }
+        }
+     }
+   else if(d.action == MA_CLOSE_FRIDAY || d.action == MA_CLOSE_NYOPEN)
+     {
+      const string label = (d.action == MA_CLOSE_FRIDAY) ? "CLOSE_FRIDAY" : "CLOSE_NYOPEN";
+      const double pre_close_profit = PositionGetDouble(POSITION_PROFIT);
       Log.Info(StringFormat("MANAGE %s ticket=%I64u %s slip=%dpts (%s)",
                              pos_sym, g_state.open_trade_ticket, label, slip, d.reason), pos_sym);
-      //  Capture floating P/L before the close — POSITION_PROFIT reflects
-      //  current unrealized at this moment, close to realized post-fill.
-      const double pre_close_profit = PositionGetDouble(POSITION_PROFIT);
       action_ok = CTradeManager::CloseAtMarket(g_state.open_trade_ticket, slip);
       if(action_ok)
         {
-         //  Apply streak semantics for forced closes (spec §5.5 / §5.7 / §3.4).
          const EForcedCloseReason fcr =
-            (d.action == MA_CLOSE_LIPS)   ? FCR_LIPS_BREAK :
-            (d.action == MA_CLOSE_FRIDAY) ? FCR_FRIDAY_CLOSE :
-                                            FCR_NY_CARRYOVER;
-         CStreakManager::OnForcedClose(g_state, fcr, Max_Streak_Length);
+            (d.action == MA_CLOSE_FRIDAY) ? FCR_FRIDAY_CLOSE : FCR_NY_CARRYOVER;
+         //  Stage 2: if partial_done is already true, the streak was booked at
+         //  the partial moment — don't double-count. Daily-loss still applies.
+         if(!g_state.partial_done)
+            CStreakManager::OnForcedClose(g_state, fcr, Max_Streak_Length);
          CDailyLossManager::ApplyRealizedProfit(g_state, pre_close_profit, g_day_start_equity);
          g_state.open_trade_ticket   = 0;
          g_state.open_trade_cycle_id = "";
+         g_state.partial_done        = false;
+         g_state.be_move_time        = 0;
+         g_state.entry_R_distance    = 0.0;
          Log.Info(StringFormat("    forced-close streak update: position=%d last_sl=%d (fcr=%d) profit=%.2f daily_loss_pct=%.4f%%",
                                 g_state.streak_position, g_state.last_sl_count,
                                 (int)fcr, pre_close_profit, g_state.daily_loss_pct));
@@ -819,6 +909,8 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
       else
          Log.Error(StringFormat("MANAGE CloseAtMarket failed ticket=%I64u", g_state.open_trade_ticket), pos_sym);
      }
+   //  Note: no MA_MOVE_BE / MA_CLOSE_LIPS handlers — Decide never returns those post-Task-C
+   //  (Task 7 removes them from the enum).
 
    if(action_ok)
      {
