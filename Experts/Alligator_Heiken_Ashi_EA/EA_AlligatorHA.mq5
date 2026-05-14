@@ -715,6 +715,17 @@ bool EvaluateOpenPosition(const string sym, const datetime bar_time)
    mctx.bars_since_entry        = 0;
    mctx.close_m15_s2 = 0; mctx.lips_m15_s2 = 0;
    mctx.close_m15_s3 = 0; mctx.lips_m15_s3 = 0;
+   //--- Stage 2: partial-close-and-BE + trail-delay context
+   mctx.partial_done            = g_state.partial_done;
+   mctx.partial_close_trigger_R = Partial_Close_Trigger_R;
+   mctx.trail_delay_bars        = Trail_Delay_Bars;
+   mctx.entry_R_distance        = g_state.entry_R_distance;
+   //  bars_since_BE_move: 0 until BE move; thereafter (bar_time - be_move_time)/900.
+   //  Pre-BE bars_since_BE_move is unused by Decide (MA_TRAIL is gated by partial_done).
+   if(g_state.be_move_time > 0 && bar_time > g_state.be_move_time)
+      mctx.bars_since_BE_move = (int)(((long)bar_time - (long)g_state.be_move_time) / 900);
+   else
+      mctx.bars_since_BE_move = 0;
 
    if(same_sym)
      {
