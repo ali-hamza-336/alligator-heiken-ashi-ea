@@ -31,19 +31,24 @@
 //| Inputs — verbatim from EA_Action_Plan.md §9                      |
 //+------------------------------------------------------------------+
 //--- ACCOUNT & RISK
-input double  AccountSize_Reference  = 100000.0;  // For documentation only; live uses real equity
-input double  Risk_Position1         = 0.30;      // % per first trade
-input double  Risk_Position2         = 0.50;      // % per second trade
-input double  Risk_Position3         = 0.70;      // % per third trade
-input double  Max_Daily_Loss         = 1.50;      // % — hard stop for the day
-input int     Max_Streak_Length      = 3;         // SLs before streak reset
-input double  Max_Total_DD_Buffer    = 7.00;      // % below initial — emergency block
-//--- Path A: hard ceiling on any single lot (belt-and-braces vs sizing blow-ups).
-input double  Max_Lot                = 50.0;      // Max lots per trade
+//--- AccountSize_Reference: documentation only; live sizing uses real equity.
+//--- Risk_Position1/2/3: % equity risked per trade in streak slots 1/2/3.
+//--- Max_Daily_Loss: % equity hard stop for the day (FTMO daily-loss rule).
+//--- Max_Total_DD_Buffer: % below initial balance for the emergency entry-block (FTMO max-loss rule, default 7 leaves 3% headroom under FTMO's 10%).
+//--- Max_Lot: hard ceiling on any single lot (Path A — belt-and-braces vs sizing blow-ups).
+input double  AccountSize_Reference  = 100000.0;
+input double  Risk_Position1         = 0.30;
+input double  Risk_Position2         = 0.50;
+input double  Risk_Position3         = 0.70;
+input double  Max_Daily_Loss         = 1.50;
+input int     Max_Streak_Length      = 3;
+input double  Max_Total_DD_Buffer    = 7.00;
+input double  Max_Lot                = 50.0;
 
 //--- SESSION TIMES (NY local)
+//--- NY_End_Hour: last 2hr of NY skipped per spec §5.1.
 input int     NY_Start_Hour          = 8;
-input int     NY_End_Hour            = 15;        // last 2hr of NY skipped
+input int     NY_End_Hour            = 15;
 input int     Tokyo_Skip_First_Min   = 30;
 input int     Friday_Close_Hour_NY   = 15;
 
@@ -56,43 +61,57 @@ input int     Lips_Period            = 5;
 input int     Lips_Shift             = 3;
 
 //--- ATR-BASED FILTERS
+//--- ATR_Mouth_Open_Mult: required Lips-Jaw separation as a multiple of ATR.
+//--- ATR_SL_Buffer: SL placed at Jaw/swing ± Buffer × ATR.
+//--- Min_SL_ATR_Mult: floor on SL distance as a multiple of ATR. Path A Stage 1.1 dialled back from 1.0 (rejected ~110 legit Type-A signals); 0.3 rejects only the truly tangled-Alligator cases.
+//--- ATR_Tangle_Tolerance: max Lips-Jaw separation that still counts as "mouth closed" (Type B).
+//--- Min_ATR_Ratio: dead-market filter (current ATR / mean ATR floor).
+//--- Trail_ATR_Buffer: trail SL = Lips ± Buffer × ATR. Stage 2 widened 0.3→0.5 for more runner room.
+//--- BE_Trigger_R / BE_Buffer_Pips: legacy BE inputs. Stage 2 derives partial trigger from Partial_Close_Trigger_R; BE_Buffer_Pips still used for the post-partial SL offset.
 input int     ATR_Period             = 14;
-input double  ATR_Mouth_Open_Mult    = 0.4;       // Lips-Jaw separation
-input double  ATR_SL_Buffer          = 0.2;       // beyond Jaw/swing
-//--- Path A Stage 1.1: dialled back from 1.0 (rejected ~110 legit Type-A signals
-//--- at ~0.6×ATR). Now rejects only the truly tangled-Alligator cases.
-input double  Min_SL_ATR_Mult        = 0.3;       // Min SL distance (xATR)
-input double  ATR_Tangle_Tolerance   = 0.3;       // for "mouth closed" detection
-input double  Min_ATR_Ratio          = 0.5;       // dead market filter
+input double  ATR_Mouth_Open_Mult    = 0.4;
+input double  ATR_SL_Buffer          = 0.2;
+input double  Min_SL_ATR_Mult        = 0.3;
+input double  ATR_Tangle_Tolerance   = 0.3;
+input double  Min_ATR_Ratio          = 0.5;
 input double  Trail_ATR_Buffer       = 0.5;
 input double  BE_Trigger_R           = 1.0;
 input double  BE_Buffer_Pips         = 2.0;
-//--- Lips-break exit softening (Phase 8 — defaults reproduce spec §3.4 exactly)
-input double  LipsBreak_ATR_Buffer   = 0.0;       // 0 = spec; break needs close past Lips by >= mult*ATR
-input int     LipsBreak_Confirm_Bars = 2;         // 2 = Phase-8 tuned-good; 1 = spec §3.4; 3 = stricter
-input int     LipsBreak_Min_Hold_Bars= 0;         // 0 = spec; no Lips-break exit in the first N M15 bars after entry
 
-//--- Stage 2 (Path A): partial-close-at-+1R spectrum + trail-delay gate
-//--- See docs/2026-05-13-path-a-stage2.md. Fraction=0 → BE-only (no partial);
-//--- Fraction=1 → 1:1 RR baseline; default 0.5 banks half, runner trails.
-input double  Partial_Close_Fraction  = 0.5;      // Partial size at +1R (0..1)
-input double  Partial_Close_Trigger_R = 1.0;      // Partial fires at +N*R
-input int     Trail_Delay_Bars        = 2;        // M15 bars post-BE before trail starts
+//--- LIPS-BREAK SOFTENING (Phase 8). Defaults reproduce spec §3.4 verbatim.
+//--- LipsBreak_ATR_Buffer: 0 = exact spec; break needs |close - Lips| >= mult × ATR.
+//--- LipsBreak_Confirm_Bars: 1 = spec; 2 = Phase-8 tuned-good (default); 3 = stricter.
+//--- LipsBreak_Min_Hold_Bars: 0 = spec; suppress the Lips exit for the first N M15 bars after entry.
+//--- Stage 2: these gates now drive MA_TIGHTEN_SL_LIPS (SL tighten), not MA_CLOSE_LIPS (market close).
+input double  LipsBreak_ATR_Buffer   = 0.0;
+input int     LipsBreak_Confirm_Bars = 2;
+input int     LipsBreak_Min_Hold_Bars= 0;
+
+//--- STAGE 2 PARTIAL-CLOSE-AT-+1R + TRAIL-DELAY (Path A). See docs/2026-05-13-path-a-stage2.md.
+//--- Partial_Close_Fraction: fraction of lot closed at +trigger R. 0 = BE-only (no partial); 1 = close full (1:1 RR baseline); 0.5 = banks half, runner trails (default).
+//--- Partial_Close_Trigger_R: at how many R the partial fires.
+//--- Trail_Delay_Bars: M15 bars post-BE before MA_TRAIL starts firing.
+input double  Partial_Close_Fraction  = 0.5;
+input double  Partial_Close_Trigger_R = 1.0;
+input int     Trail_Delay_Bars        = 2;
 
 //--- TREND/STRENGTH FILTERS
 input int     ADX_Period             = 14;
 input double  Min_ADX_1H             = 20.0;
 
 //--- SUPPORT/RESISTANCE
+//--- SR_Swing_Bars_Each_Side: pivot detection window — N bars must be lower (high) / higher (low) on EACH side.
 input int     SR_Lookback_Bars_1H    = 100;
 input int     SR_Lookback_Bars_4H    = 50;
 input int     SR_Block_Distance_Pips = 10;
-input int     SR_Swing_Bars_Each_Side = 3;        // for swing detection
+input int     SR_Swing_Bars_Each_Side = 3;
 
 //--- HEIKEN ASHI
-input double  HA_Wick_Tolerance_Pips = 1.0;       // max opposing wick
+//--- HA_Wick_Tolerance_Pips: max opposing wick on the Type-B trigger bar.
+input double  HA_Wick_Tolerance_Pips = 1.0;
 
-//--- SPREAD LIMITS (per symbol)
+//--- SPREAD LIMITS (per symbol — units match the symbol's quote: pips for FX, cents for XAUUSD, points for NAS100).
+//--- Path A: XAUUSD raised 30→50 (IC Markets gold), NAS100 raised 2→200 (USTEC ~90 pts off-US-hours, but still unrideable on this broker).
 input double  Spread_EURUSD          = 1.5;
 input double  Spread_GBPUSD          = 1.5;
 input double  Spread_USDJPY          = 2.0;
@@ -100,10 +119,8 @@ input double  Spread_USDCHF          = 2.0;
 input double  Spread_AUDUSD          = 2.0;
 input double  Spread_USDCAD          = 2.0;
 input double  Spread_NZDUSD          = 2.0;
-//--- Path A: spread caps raised — XAUUSD was 30 (too tight on IC Markets gold),
-//--- NAS100 was 2 (USTEC quotes ~90 pts off-US-hours); both per-broker tunable.
-input double  Spread_XAUUSD          = 50.0;      // Max spread (XAUUSD, cents)
-input double  Spread_NAS100          = 200.0;     // Max spread (NAS100, points)
+input double  Spread_XAUUSD          = 50.0;
+input double  Spread_NAS100          = 200.0;
 
 //--- SLIPPAGE
 input int     Slippage_FX_Pips       = 3;
@@ -111,24 +128,24 @@ input int     Slippage_Gold_Cents    = 50;
 input int     Slippage_NAS_Points    = 5;
 
 //--- NEWS FILTER
+//--- News_Impact_Filter accepts: "High", "Medium+", "All". News auto-disables in Strategy Tester.
 input bool    News_Filter_Enabled    = true;
 input int     News_Block_Min_Before  = 15;
 input int     News_Block_Min_After   = 15;
-input string  News_Impact_Filter     = "High";    // High, Medium+, All
+input string  News_Impact_Filter     = "High";
 
-//--- SYMBOLS (CSV list) — Path A Stage 1: dropped USDCAD & AUDUSD (consistent losers in the 12-mo backtest).
-//--- Stage 1.1: dropped NAS100 — every signal rejected (spread=NO) on IC Markets even with Spread_NAS100=200.
+//--- SYMBOLS (CSV list) — Path A Stage 1.1: 6 symbols, NAS100/USDCAD/AUDUSD dropped (all unprofitable on the 12-mo IC Markets backtest).
 input string  Trade_Symbols          = "EURUSD,GBPUSD,USDJPY,USDCHF,NZDUSD,XAUUSD";
 
 //--- SYSTEM
+//--- Phase2_Diagnostic_Dump: per-bar indicator dump for development. Leave OFF in production.
 input long    Magic_Number           = 20260503;
 input bool    Verbose_Logging        = true;
 input string  State_File_Name        = "EA_State.json";
-input bool    Phase2_Diagnostic_Dump = false;     // Phase-2 per-bar indicator dump
+input bool    Phase2_Diagnostic_Dump = false;
 
-//--- PHASE 6: 0 = auto-derive from broker GMT offset + US DST (recommended).
-//--- Non-zero = override (e.g. -7 to force CEST→EDT). Useful for tester.
-input int     Server_To_NY_Offset_Hours = 0;     // 0 = auto, non-zero = override
+//--- Server_To_NY_Offset_Hours: 0 = auto-derive from broker GMT offset + US DST (recommended). Non-zero = override (e.g. -7 to force CEST→EDT), useful for tester only.
+input int     Server_To_NY_Offset_Hours = 0;
 
 //+------------------------------------------------------------------+
 //| Globals                                                          |
